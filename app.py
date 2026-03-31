@@ -61,7 +61,7 @@ with tab2:
     for act in actions:
         # 使用 segmented_control 做出按鈕組感
         score = st.segmented_control(
-            label=f"👉 動作: **{act}**",
+            label=f" 動作: **{act}**",
             options=["FA", "FS", "DA", "DS"],
             key=f"btn_{act}",
             selection_mode="single",
