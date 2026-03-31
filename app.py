@@ -106,12 +106,13 @@ with tab3:
 
     st.divider()
     # 上傳按鈕
-    if st.button("🚀 完成評估並上傳雲端"):
+if st.button("🚀 完成評估並上傳雲端"):
         if not p_name:
             st.error("請先在『病人資訊』分頁輸入病人姓名！")
         else:
             try:
-                new_data = pd.DataFrame([{
+                # 1. 整理新資料 (DataFrame)
+                new_row = pd.DataFrame([{
                     "日期": str(p_date),
                     "評估人": p_assessor,
                     "病人姓名": p_name,
@@ -121,11 +122,22 @@ with tab3:
                     "判定結果": " / ".join([m['result'] for m in matches]) if matches else "無結果",
                     "備註": p_note
                 }])
-                # 這裡 worksheet 名稱必須跟 Google Sheets 標籤名稱完全一致
-                existing_data = conn.read(worksheet="Sheet1", usecols=list(range(8)))
-                updated_df = pd.concat([existing_data, new_data], ignore_index=True)
+
+                # 2. 關鍵步驟：先讀取 Google Sheets 現有的所有資料
+                # 注意：ttl=0 是為了確保每次都讀到最新的，不要讀到舊的緩存(cache)
+                existing_data = conn.read(worksheet="Sheet1", ttl=0)
+                
+                # 3. 將新舊資料合併 (使用 concat 串接)
+                # 如果 existing_data 為空，就直接用 new_row
+                if existing_data is not None and not existing_data.empty:
+                    updated_df = pd.concat([existing_data, new_row], ignore_index=True)
+                else:
+                    updated_df = new_row
+
+                # 4. 寫回 Google Sheets (這會覆蓋整張表，但因為我們已經合併了舊資料，所以看起來是追加)
                 conn.update(worksheet="Sheet1", data=updated_df)
+                
                 st.balloons()
-                st.success("✅ 資料已成功同步至 Google Sheets！")
+                st.success(f"✅ 已成功追加資料！目前總共有 {len(updated_df)} 筆紀錄。")
             except Exception as e:
-                st.error(f"❌ 上傳失敗。請確認 Secrets 中的試算表網址正確，且該試算表已共用給服務帳號 Email。錯誤: {e}")
+                st.error(f"❌ 追加失敗。錯誤訊息: {e}")
