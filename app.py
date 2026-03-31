@@ -1,7 +1,12 @@
 import streamlit as st
 from datetime import date
+import streamlit as st
+from datetime import date
+import pandas as pd
+from streamlit_gsheets import GSheetsConnection
 
 # 1. 基礎網頁設定
+conn = st.connection("gsheets", type=GSheetsConnection)
 st.set_page_config(page_title="KPM 筋膜評估系統", layout="centered")
 
 # CSS 優化
@@ -140,5 +145,35 @@ with tab3:
 
     st.divider()
     if st.button("完成評估"):
-        st.balloons()
-        st.success(f"已紀錄：{p_name} ({p_id})")
+st.divider()
+    if st.button("🚀 完成評估並上傳雲端"):
+        # 檢查是否有輸入病人姓名，避免空資料
+        if not p_name:
+            st.error("請先在『病人資訊』分頁輸入病人姓名！")
+        else:
+            try:
+                # 1. 整理要上傳的字典資料
+                # 這裡的 Key (左邊的字) 必須跟你的 Google 試算表第一列標題完全一模一樣
+                new_data = pd.DataFrame([{
+                    "日期": str(p_date),
+                    "評估人": p_assessor,
+                    "病人姓名": p_name,
+                    "病歷號": p_id,
+                    "DA": ", ".join(da_list) if da_list else "無",
+                    "DS": ", ".join(ds_list) if ds_list else "無",
+                    "判定結果": " / ".join([m['result'] for m in matches]) if matches else "無結果",
+                    "備註": p_note
+                }])
+
+                # 2. 讀取現有資料並合併 (Sheet1 是你的工作表名稱)
+                existing_data = conn.read(worksheet="Sheet1", usecols=list(range(8)))
+                updated_df = pd.concat([existing_data, new_data], ignore_index=True)
+
+                # 3. 寫回 Google Sheets
+                conn.update(worksheet="Sheet1", data=updated_df)
+                
+                st.balloons()
+                st.success(f"✅ 資料已成功同步至 Google Sheets！")
+            except Exception as e:
+                st.error(f"❌ 上傳失敗。這通常是因為 Secrets 設定或試算表名稱不符。錯誤: {e}")
+
