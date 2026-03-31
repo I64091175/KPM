@@ -9,8 +9,8 @@ st.markdown("""
     <style>
     .stHeader { font-size: 1.2rem !important; color: #2c3e50; }
     .action-title { font-size: 1.1rem; font-weight: bold; margin-bottom: 5px; color: #1E88E5; }
-    .priority-header { color: #2E7D32; font-weight: bold; border-left: 5px solid #2E7D32; padding-left: 10px; margin-top: 20px; }
-    .secondary-header { color: #E65100; font-weight: bold; border-left: 5px solid #E65100; padding-left: 10px; margin-top: 20px; }
+    .superficial-header { color: #2E7D32; font-weight: bold; border-left: 5px solid #2E7D32; padding-left: 10px; margin-top: 20px; }
+    .deep-header { color: #E65100; font-weight: bold; border-left: 5px solid #E65100; padding-left: 10px; margin-top: 20px; }
     hr { margin-top: 1rem; margin-bottom: 1rem; border-bottom: 2px solid #eee; }
     </style>
     """, unsafe_allow_html=True)
@@ -39,6 +39,17 @@ TREATMENT_DATABASE = [
     {"pair": {"CRL", "RAD"}, "result": "右深後臂線"},
 ]
 
+# 定義深層判定的組合清單 (用於比對)
+DEEP_PAIRS = [
+    {"CE", "MSE"},
+    {"MSRR", "MSSBL"},
+    {"MSRL", "MSSBR"},
+    {"CE", "LAU"},
+    {"CE", "RAU"},
+    {"CRR", "LAD"},
+    {"CRL", "RAD"}
+]
+
 # --- 3. 介面設計 ---
 tab1, tab2, tab3 = st.tabs(["👤 病人資訊", "📝 快速評估", "📊 判定結果"])
 
@@ -47,7 +58,6 @@ with tab1:
     p_name = st.text_input("病人姓名", placeholder="請輸入姓名")
     p_id = st.text_input("病歷號/身分證號", placeholder="請輸入識別碼")
     
-    # 新增評估日期與評估人
     col_info1, col_info2 = st.columns(2)
     with col_info1:
         p_date = st.date_input("評估日期", value=date.today())
@@ -72,18 +82,14 @@ with tab2:
 
 with tab3:
     st.subheader("📋 評分摘要")
-    
-    # 1. 簡潔橫向列出等級動作
     scores_categories = {
         "🔴 DA": [k for k, v in user_scores.items() if v == "DA"],
         "🟠 DS": [k for k, v in user_scores.items() if v == "DS"],
         "🔵 FS": [k for k, v in user_scores.items() if v == "FS"],
         "🟢 FA": [k for k, v in user_scores.items() if v == "FA"]
     }
-    
     for label, acts in scores_categories.items():
         if acts:
-            # 橫向顯示動作名稱，用逗號隔開
             st.write(f"**{label}:** {', '.join(acts)}")
         else:
             st.write(f"**{label}:** 無")
@@ -91,7 +97,7 @@ with tab3:
     st.divider()
     st.subheader("📊 判定結果")
 
-    # 邏輯判定
+    # 邏輯判定：先抓出所有符合規則的組合
     da_list = [k for k, v in user_scores.items() if v == "DA"]
     ds_list = [k for k, v in user_scores.items() if v == "DS"]
     
@@ -104,26 +110,29 @@ with tab3:
             if rule["pair"].issubset(set(ds_list)):
                 matches.append(rule)
 
-    # 2. 分類與顯示 (優化顯示與顏色)
+    # 2. 進行淺層與深層分類
     if matches:
-        low_priority_triggers = {"CRR", "CRL", "CE", "CF", "CR"}
-        priority_list, secondary_list = [], []
+        superficial_results = []
+        deep_results = []
 
         for m in matches:
-            if any(act in low_priority_triggers for act in m['pair']):
-                secondary_list.append(m)
+            # 檢查目前這個組合是否在定義的深層清單中
+            if m["pair"] in DEEP_PAIRS:
+                deep_results.append(m)
             else:
-                priority_list.append(m)
+                superficial_results.append(m)
 
-        if priority_list:
-            st.markdown("<div class='priority-header'>🌟 優先判定</div>", unsafe_allow_html=True)
-            for m in priority_list:
+        # 顯示淺層判定
+        if superficial_results:
+            st.markdown("<div class='superficial-header'>🌿 淺層判定</div>", unsafe_allow_html=True)
+            for m in superficial_results:
                 pair_str = " + ".join(sorted(list(m['pair'])))
                 st.success(f"**{pair_str}** \n\n {m['result']}")
 
-        if secondary_list:
-            st.markdown("<div class='secondary-header'>🔍 基礎/細節判定</div>", unsafe_allow_html=True)
-            for m in secondary_list:
+        # 顯示深層判定
+        if deep_results:
+            st.markdown("<div class='deep-header'>💎 深層判定</div>", unsafe_allow_html=True)
+            for m in deep_results:
                 pair_str = " + ".join(sorted(list(m['pair'])))
                 st.warning(f"**{pair_str}** \n\n {m['result']}")
     else:
@@ -132,4 +141,4 @@ with tab3:
     st.divider()
     if st.button("完成評估"):
         st.balloons()
-        st.success(f"已紀錄：{p_name} ({p_id}) / 評估人：{p_assessor}")
+        st.success(f"已紀錄：{p_name} ({p_id})")
