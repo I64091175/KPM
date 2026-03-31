@@ -25,8 +25,8 @@ TREATMENT_DATABASE = [
     {"pair": {"MSE", "MSRL"}, "result": "骨盆以上 左前功能線"},
     {"pair": {"CF", "MSF"}, "result": "骨盆以上 淺背線"},
     {"pair": {"CE", "MSE"}, "result": "骨盆以上 深前線"},
-    {"pair": {"CR", "MSSBL"}, "result": "骨盆以上 右側線"},
-    {"pair": {"CR", "MSSBR"}, "result": "骨盆以上 左側線"},
+    {"pair": {"CRR", "MSSBL"}, "result": "骨盆以上 右側線"},
+    {"pair": {"CRL", "MSSBR"}, "result": "骨盆以上 左側線"},
     {"pair": {"MSRR", "MSSBL"}, "result": "骨盆以下 右側線或左深前線"},
     {"pair": {"MSRL", "MSSBR"}, "result": "骨盆以下 左側線或右深前線"},
     {"pair": {"CE", "LAU"}, "result": "左深前臂線"},
@@ -52,7 +52,7 @@ with tab2:
         "CF", "CE", "CRR", "CRL", 
         "RAU", "RAD", "LAU", "LAD", 
         "MSF", "MSE", "MSRR", "MSRL", 
-        "MSSBR", "MSSBL", "CADS", "CR"
+        "MSSBR", "MSSBL", "CADS"
     ]
     
     user_scores = {}
