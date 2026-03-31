@@ -1,4 +1,5 @@
 import streamlit as st
+from datetime import date
 
 # 1. 基礎網頁設定
 st.set_page_config(page_title="KPM 筋膜評估系統", layout="centered")
@@ -45,10 +46,18 @@ with tab1:
     st.subheader("基本資料紀錄")
     p_name = st.text_input("病人姓名", placeholder="請輸入姓名")
     p_id = st.text_input("病歷號/身分證號", placeholder="請輸入識別碼")
+    
+    # 新增評估日期與評估人
+    col_info1, col_info2 = st.columns(2)
+    with col_info1:
+        p_date = st.date_input("評估日期", value=date.today())
+    with col_info2:
+        p_assessor = st.text_input("評估人", placeholder="治療師姓名")
+        
     p_note = st.text_area("整體臨床總結備註", height=100)
 
 with tab2:
-    st.info("請直接點選等級按鈕，並可在下方輸入特殊標註")
+    st.info("直接點選等級按鈕，並可在下方輸入備註")
     actions = ["CF", "CE", "CRR", "CRL", "RAU", "RAD", "LAU", "LAD", "MSF", "MSE", "MSRR", "MSRL", "MSSBR", "MSSBL", "CADS", "CR"]
     user_scores, user_remarks = {}, {}
     
@@ -57,39 +66,36 @@ with tab2:
             st.markdown(f"<div class='action-title'>{i}. 動作: {act}</div>", unsafe_allow_html=True)
             score = st.segmented_control(label=f"s_{act}", options=["FA", "FS", "DA", "DS"], key=f"btn_{act}", selection_mode="single", default=None, label_visibility="collapsed")
             user_scores[act] = score
-            remark = st.text_input(f"備註 ({act})", key=f"note_{act}", placeholder="輸入特殊表現...")
+            remark = st.text_input(f"備註 ({act})", key=f"note_{act}", placeholder="特殊表現...")
             user_remarks[act] = remark
             st.divider()
 
 with tab3:
-    st.subheader("📋 評分狀態彙整")
+    st.subheader("📋 評分摘要")
     
-    # 1. 條列各等級動作
+    # 1. 簡潔橫向列出等級動作
     scores_categories = {
-        "🔴 DA (顯著功能障礙)": [k for k, v in user_scores.items() if v == "DA"],
-        "🟠 DS (輕微功能障礙)": [k for k, v in user_scores.items() if v == "DS"],
-        "🔵 FS (輕微功能受限)": [k for k, v in user_scores.items() if v == "FS"],
-        "🟢 FA (功能正常)": [k for k, v in user_scores.items() if v == "FA"]
+        "🔴 DA": [k for k, v in user_scores.items() if v == "DA"],
+        "🟠 DS": [k for k, v in user_scores.items() if v == "DS"],
+        "🔵 FS": [k for k, v in user_scores.items() if v == "FS"],
+        "🟢 FA": [k for k, v in user_scores.items() if v == "FA"]
     }
     
     for label, acts in scores_categories.items():
         if acts:
-            with st.container():
-                st.markdown(f"**{label}**")
-                for a in acts:
-                    remark_str = f"（備註：{user_remarks[a]}）" if user_remarks[a] else ""
-                    st.write(f"└ {a} {remark_str}")
+            # 橫向顯示動作名稱，用逗號隔開
+            st.write(f"**{label}:** {', '.join(acts)}")
         else:
-            st.caption(f"{label}：無")
+            st.write(f"**{label}:** 無")
 
     st.divider()
-    st.subheader("📊 筋膜鍊判定結果")
+    st.subheader("📊 判定結果")
 
+    # 邏輯判定
     da_list = [k for k, v in user_scores.items() if v == "DA"]
     ds_list = [k for k, v in user_scores.items() if v == "DS"]
     
     matches = []
-    # 邏輯判定
     for rule in TREATMENT_DATABASE:
         if rule["pair"].issubset(set(da_list)):
             matches.append(rule)
@@ -98,11 +104,10 @@ with tab3:
             if rule["pair"].issubset(set(ds_list)):
                 matches.append(rule)
 
-    # 2. 排序與分類顯示
+    # 2. 分類與顯示 (優化顯示與顏色)
     if matches:
         low_priority_triggers = {"CRR", "CRL", "CE", "CF", "CR"}
-        priority_list = []
-        secondary_list = []
+        priority_list, secondary_list = [], []
 
         for m in matches:
             if any(act in low_priority_triggers for act in m['pair']):
@@ -110,23 +115,21 @@ with tab3:
             else:
                 priority_list.append(m)
 
-        # 顯示優先結果
         if priority_list:
-            st.markdown("<div class='priority-header'>🌟 優先判定結果</div>", unsafe_allow_html=True)
+            st.markdown("<div class='priority-header'>🌟 優先判定</div>", unsafe_allow_html=True)
             for m in priority_list:
                 pair_str = " + ".join(sorted(list(m['pair'])))
                 st.success(f"**{pair_str}** \n\n {m['result']}")
 
-        # 顯示次要結果 (包含特定動作)
         if secondary_list:
-            st.markdown("<div class='secondary-header'>🔍 基礎/細節判定結果 (相關：CRR, CRL, CE, CF, CR)</div>", unsafe_allow_html=True)
+            st.markdown("<div class='secondary-header'>🔍 基礎/細節判定</div>", unsafe_allow_html=True)
             for m in secondary_list:
                 pair_str = " + ".join(sorted(list(m['pair'])))
                 st.warning(f"**{pair_str}** \n\n {m['result']}")
     else:
-        st.info("目前的動作評分組合尚未定義對應的筋膜線。")
+        st.info("目前組合尚未定義對應筋膜線。")
 
     st.divider()
-    if st.button("完成並暫存評估"):
+    if st.button("完成評估"):
         st.balloons()
-        st.success(f"病人 {p_name} 的資料已紀錄。")
+        st.success(f"已紀錄：{p_name} ({p_id}) / 評估人：{p_assessor}")
