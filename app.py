@@ -99,3 +99,23 @@ with tab3:
         for rule in TREATMENT_DATABASE:
             if rule["pair"].issubset(set(ds_list)):
                 final_matches.append(rule)
+
+    # 顯示結果
+    if final_matches:
+        for match in final_matches:
+            pair_string = " + ".join(sorted(list(match['pair'])))
+            st.success(f"### {pair_string} \n **{match['result']}**")
+            
+            for act in match['pair']:
+                if user_remarks[act]:
+                    st.caption(f"💡 {act} 備註: {user_remarks[act]}")
+    else:
+        if not da_list and not ds_list:
+            st.info("尚未進行任何評分。")
+        else:
+            st.info("目前的動作評分組合尚未定義對應的筋膜線。")
+
+    st.divider()
+    if st.button("完成並暫存評估"):
+        st.balloons()
+        st.success(f"病人 {p_name} 的資料已紀錄。")
