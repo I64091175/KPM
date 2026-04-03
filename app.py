@@ -17,14 +17,13 @@ def fetch_data_no_cache(_conn):
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# CSS 樣式加強：區分深淺層顏色
+# CSS 樣式加強
 st.markdown("""
     <style>
     .stHeader { font-size: 1.2rem !important; color: #2c3e50; }
     .action-title { font-size: 1.1rem; font-weight: bold; margin-bottom: 5px; color: #1E88E5; }
     .superficial-header { color: #2E7D32; font-weight: bold; border-left: 5px solid #2E7D32; padding-left: 10px; margin-top: 20px; }
     .deep-header { color: #E65100; font-weight: bold; border-left: 5px solid #E65100; padding-left: 10px; margin-top: 20px; }
-    /* 自定義深層判定警示盒 */
     .deep-box {
         background-color: #FFF3E0;
         border-left: 5px solid #EF6C00;
@@ -78,15 +77,10 @@ DEEP_PAIRS = [{"CE", "MSE"}, {"MSRR", "MSSBL"}, {"MSRL", "MSSBR"}, {"CE", "LAU"}
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["👤 病人資訊", "📝 快速評估", "📊 判定結果", "📚 筋膜圖譜", "📈 歷史追蹤"])
 
 with tab1:
-    st.subheader("👤 基本資料")
+    st.subheader("👤 病人基本資料")
     p_name = st.text_input("病人姓名", key="p_name")
     p_id = st.text_input("病歷號/身分證號", key="p_id", placeholder="例如: 00123")
-    col1, col2 = st.columns(2)
-    with col1:
-        p_date = st.date_input("評估日期", value=date.today())
-    with col2:
-        # ✅ 新增：手動調整時間功能，預設為現在
-        p_time = st.time_input("評估時間 (可用於補紀錄)", value=datetime.now().time())
+    p_date = st.date_input("評估日期 (若是今天會自動加時間，過去則加補字)", value=date.today())
     p_assessor = st.text_input("評估人", key="p_assessor")
     p_note = st.text_area("整體臨床總結備註 (此處會與動作備註合併)", height=100)
 
@@ -114,9 +108,7 @@ with tab3:
 
     if matches:
         for m in matches:
-            is_deep = m["pair"] in DEEP_PAIRS
-            if is_deep:
-                # ✅ 修正深層判定的顯示顏色 (使用橘紅色區塊)
+            if m["pair"] in DEEP_PAIRS:
                 st.markdown(f"""
                     <div class="deep-box">
                         <strong>💎 深層判定</strong><br>
@@ -130,7 +122,7 @@ with tab3:
             
             imgs = [v for k, v in IMAGE_MAPPING.items() if k in m['result']]
             if imgs:
-                with st.expander("🔍 檢視對應筋膜圖 (縮小 50%)"):
+                with st.expander("🔍 檢視對應筋膜圖 (點擊展開)"):
                     for img in imgs:
                         l, mid, r = st.columns([1, 2, 1])
                         try: mid.image(f"images/{img}", caption=f"對應: {img}", use_container_width=True)
@@ -144,15 +136,20 @@ with tab3:
             st.error("請輸入姓名與病歷號！")
         else:
             try:
-                # 1. 合併備註邏輯
+                # 1. 備註合併邏輯
                 final_combined_note = p_note if p_note else ""
                 action_detail_list = [f"{act}:{user_action_notes[act].strip()}" for act in ACTIONS if user_action_notes[act].strip()]
                 if action_detail_list:
                     combined_actions = "/".join(action_detail_list)
                     final_combined_note = f"{final_combined_note} | 詳細細節: {combined_actions}" if final_combined_note else combined_actions
 
-                # ✅ 2. 修正時間抓取邏輯：抓取介面上的 p_date 與 p_time
-                final_datetime_str = f"{p_date} {p_time.strftime('%H:%M')}"
+                # 2. 自動時間邏輯
+                if p_date == date.today():
+                    # 今天：加當前時間
+                    final_datetime_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+                else:
+                    # 過去：加 (補)
+                    final_datetime_str = f"{p_date} (補)"
 
                 # 3. 建立紀錄
                 record = {
@@ -172,7 +169,7 @@ with tab3:
                 df_final = pd.concat([df_old, df_new], ignore_index=True)
                 conn.update(worksheet="Sheet1", data=df_final)
                 
-                st.success(f"✅ 資料已同步！紀錄時間：{final_datetime_str}")
+                st.success(f"✅ 資料已同步！日期欄位：{final_datetime_str}")
                 st.balloons()
             except Exception as e:
                 st.error(f"上傳失敗：{e}")
@@ -184,7 +181,7 @@ with tab4:
         "SBL 淺背線": ["SBL.jpg"],
         "SFL 淺前線": ["SFL.jpg"],
         "LL 側線": ["LL.jpg"],
-        "SPL 螺旋線": ["SPL.jpg"], # ✅ 已統一格式
+        "SPL 螺旋線": ["SPL.jpg"],
         "DFL 深前線": ["DFL.jpg"],
         "SFAL 淺前臂線": ["SFAL.jpg"],
         "SBAL 淺後臂線": ["SBAL.jpg"],
@@ -208,7 +205,11 @@ with tab5:
             if "病歷號" in all_df.columns:
                 all_df['病歷號'] = all_df['病歷號'].astype(str).str.lstrip("'").str.strip()
                 target_id = str(search_id).strip()
-                p_history = all_df[all_df["病歷號"] == target_id].sort_values("日期")
+                p_history = all_df[all_df["病歷號"] == target_id].copy()
+                
+                # ✅ 修正歷史搜尋排序：移除 (補) 以便正確排序
+                p_history['sort_date'] = p_history['日期'].str.replace(" (補)", "", regex=False)
+                p_history = p_history.sort_values("sort_date")
                 
                 if not p_history.empty:
                     st.success(f"找到 {len(p_history)} 筆歷史紀錄")
@@ -239,6 +240,6 @@ with tab5:
                     fig_radar.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 4], tickvals=[1,2,3,4], ticktext=['DA','DS','FS','FA'])), margin=dict(t=30, b=30))
                     st.plotly_chart(fig_radar, use_container_width=True)
 
-                    st.dataframe(p_history[["日期", "判定結果", "備註"]].sort_values("日期", ascending=False))
+                    st.dataframe(p_history[["日期", "判定結果", "備註"]].sort_values("sort_date", ascending=False))
                 else:
                     st.warning(f"查無資料：{target_id}")
