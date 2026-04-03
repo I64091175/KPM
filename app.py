@@ -3,7 +3,7 @@ from datetime import date
 import pandas as pd
 from streamlit_gsheets import GSheetsConnection
 
-# 1. 基礎網頁設定 (這行必須在最前面！)
+# 1. 基礎網頁設定
 st.set_page_config(page_title="KPM 筋膜評估系統", layout="centered")
 
 # 2. 建立 Google Sheets 連接
@@ -41,10 +41,24 @@ TREATMENT_DATABASE = [
     {"pair": {"CE", "LAU"}, "result": "左深前臂線"},
     {"pair": {"CE", "RAU"}, "result": "右深前臂線"},
     {"pair": {"CRR", "LAD"}, "result": "左深後臂線"},
-    {"pair": {"CRL", "RAD"}, "right": "右深後臂線"}
+    {"pair": {"CRL", "RAD"}, "result": "右深後臂線"},
 ]
 
+# 深層判定組合
 DEEP_PAIRS = [{"CE", "MSE"}, {"MSRR", "MSSBL"}, {"MSRL", "MSSBR"}, {"CE", "LAU"}, {"CE", "RAU"}, {"CRR", "LAD"}, {"CRL", "RAD"}]
+
+# 圖片對應清單 (依據使用者要求新增)
+IMAGE_MAPPING = {
+    "後螺旋線": "SPL.jpg",
+    "後功能線": "FF1.jpg",
+    "前功能線": "FF2.jpg",
+    "淺背線": "SBL.jpg",
+    "淺前線": "SFL.jpg",
+    "側線": "LL.jpg",
+    "深前線": "DFL.jpg",
+    "深前臂線": "DFAL.jpg",
+    "深後臂線": "DBAL.jpg"
+}
 
 # --- 4. 介面設計 ---
 tab1, tab2, tab3 = st.tabs(["👤 病人資訊", "📝 快速評估", "📊 判定結果"])
@@ -90,6 +104,21 @@ with tab3:
         for rule in TREATMENT_DATABASE:
             if rule["pair"].issubset(set(ds_list)): matches.append(rule)
 
+    # 圖片顯示函式
+    def display_matched_images(result_text):
+        images_to_show = []
+        for keyword, img_file in IMAGE_MAPPING.items():
+            if keyword in result_text:
+                images_to_show.append(img_file)
+        
+        if images_to_show:
+            cols = st.columns(len(images_to_show))
+            for i, img_file in enumerate(images_to_show):
+                try:
+                    cols[i].image(f"images/{img_file}", caption=f"對應圖示: {img_file}", use_container_width=True)
+                except:
+                    cols[i].error(f"找不到檔案: images/{img_file}")
+
     if matches:
         superficial_res, deep_res = [], []
         for m in matches:
@@ -98,46 +127,35 @@ with tab3:
 
         if superficial_res:
             st.markdown("<div class='superficial-header'>🌿 淺層判定</div>", unsafe_allow_html=True)
-            for m in superficial_res: st.success(f"**{' + '.join(sorted(list(m['pair'])))}** \n\n {m['result']}")
+            for m in superficial_res:
+                pair_str = " + ".join(sorted(list(m['pair'])))
+                st.success(f"**{pair_str}** \n\n {m['result']}")
+                display_matched_images(m['result'])
+
         if deep_res:
             st.markdown("<div class='deep-header'>💎 深層判定</div>", unsafe_allow_html=True)
-            for m in deep_res: st.warning(f"**{' + '.join(sorted(list(m['pair'])))}** \n\n {m['result']}")
-    else: st.info("目前組合尚未定義對應筋膜線。")
+            for m in deep_res:
+                pair_str = " + ".join(sorted(list(m['pair'])))
+                st.warning(f"**{pair_str}** \n\n {m['result']}")
+                display_matched_images(m['result'])
+    else:
+        st.info("目前組合尚未定義對應筋膜線。")
 
     st.divider()
-    # 上傳按鈕
-if st.button("🚀 完成評估並上傳雲端"):
+    if st.button("🚀 完成評估並上傳雲端"):
         if not p_name:
             st.error("請先在『病人資訊』分頁輸入病人姓名！")
         else:
             try:
-                # 1. 整理新資料 (DataFrame)
                 new_row = pd.DataFrame([{
-                    "日期": str(p_date),
-                    "評估人": p_assessor,
-                    "病人姓名": p_name,
-                    "病歷號": p_id,
-                    "DA": ", ".join(da_list) if da_list else "無",
-                    "DS": ", ".join(ds_list) if ds_list else "無",
-                    "判定結果": " / ".join([m['result'] for m in matches]) if matches else "無結果",
-                    "備註": p_note
+                    "日期": str(p_date), "評估人": p_assessor, "病人姓名": p_name, "病歷號": p_id,
+                    "DA": ", ".join(da_list) if da_list else "無", "DS": ", ".join(ds_list) if ds_list else "無",
+                    "判定結果": " / ".join([m['result'] for m in matches]) if matches else "無結果", "備註": p_note
                 }])
-
-                # 2. 關鍵步驟：先讀取 Google Sheets 現有的所有資料
-                # 注意：ttl=0 是為了確保每次都讀到最新的，不要讀到舊的緩存(cache)
                 existing_data = conn.read(worksheet="Sheet1", ttl=0)
-                
-                # 3. 將新舊資料合併 (使用 concat 串接)
-                # 如果 existing_data 為空，就直接用 new_row
-                if existing_data is not None and not existing_data.empty:
-                    updated_df = pd.concat([existing_data, new_row], ignore_index=True)
-                else:
-                    updated_df = new_row
-
-                # 4. 寫回 Google Sheets (這會覆蓋整張表，但因為我們已經合併了舊資料，所以看起來是追加)
+                updated_df = pd.concat([existing_data, new_row], ignore_index=True) if existing_data is not None else new_row
                 conn.update(worksheet="Sheet1", data=updated_df)
-                
                 st.balloons()
-                st.success(f"✅ 已成功追加資料！目前總共有 {len(updated_df)} 筆紀錄。")
+                st.success(f"✅ 資料已成功同步至 Google Sheets！")
             except Exception as e:
-                st.error(f"❌ 追加失敗。錯誤訊息: {e}")
+                st.error(f"❌ 上傳失敗: {e}")
