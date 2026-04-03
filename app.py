@@ -46,7 +46,6 @@ TREATMENT_DATABASE = [
 
 DEEP_PAIRS = [{"CE", "MSE"}, {"MSRR", "MSSBL"}, {"MSRL", "MSSBR"}, {"CE", "LAU"}, {"CE", "RAU"}, {"CRR", "LAD"}, {"CRL", "RAD"}]
 
-# 第三頁圖片自動匹配清單
 IMAGE_MAPPING = {
     "螺旋線": "SPL.jpg", "後功能線": "FF1.jpg", "前功能線": "FF2.jpg",
     "淺背線": "SBL.jpg", "淺前線": "SFL.jpg", "側線": "LL.jpg",
@@ -88,14 +87,16 @@ with tab3:
         for rule in TREATMENT_DATABASE:
             if rule["pair"].issubset(set(ds_list)): matches.append(rule)
 
-    # 第三頁圖片縮小 50% 顯示函式
-    def display_matched_images_small(result_text):
+    # 第三頁：讓使用者決定是否展開圖片
+    def display_matched_images_expander(result_text):
         images_to_show = [img for key, img in IMAGE_MAPPING.items() if key in result_text]
         if images_to_show:
-            for img_file in images_to_show:
-                l, mid, r = st.columns([1, 2, 1]) # 使用 1:2:1 比例達成 50% 寬度置中
-                try: mid.image(f"images/{img_file}", caption=f"對應: {img_file}", use_container_width=True)
-                except: mid.error(f"找不到檔案: images/{img_file}")
+            with st.expander("🔍 檢視對應筋膜圖 (點擊展開)"):
+                for img_file in images_to_show:
+                    # 維持 50% 縮小寬度
+                    l, mid, r = st.columns([1, 2, 1])
+                    try: mid.image(f"images/{img_file}", caption=f"對應: {img_file}", use_container_width=True)
+                    except: mid.error(f"找不到檔案: images/{img_file}")
 
     if matches:
         superficial_res, deep_res = [], []
@@ -107,13 +108,13 @@ with tab3:
             st.markdown("<div class='superficial-header'>🌿 淺層判定</div>", unsafe_allow_html=True)
             for m in superficial_res:
                 st.success(f"**{' + '.join(sorted(list(m['pair'])))}** \n\n {m['result']}")
-                display_matched_images_small(m['result'])
+                display_matched_images_expander(m['result'])
 
         if deep_res:
             st.markdown("<div class='deep-header'>💎 深層判定</div>", unsafe_allow_html=True)
             for m in deep_res:
                 st.warning(f"**{' + '.join(sorted(list(m['pair'])))}** \n\n {m['result']}")
-                display_matched_images_small(m['result'])
+                display_matched_images_expander(m['result'])
     else: st.info("目前組合尚未定義對應筋膜線。")
 
     st.divider()
@@ -121,18 +122,21 @@ with tab3:
         if not p_name: st.error("請先輸入姓名")
         else:
             try:
-                new_row = pd.DataFrame([{"日期": str(p_date), "評估人": p_assessor, "病人姓名": p_name, "病歷號": p_id, "DA": ", ".join(da_list), "DS": ", ".join(ds_list), "判定結果": " / ".join([m['result'] for m in matches]), "備註": p_note}])
+                # 這裡上傳的資料完全是純文字，不包含圖片
+                new_row = pd.DataFrame([{
+                    "日期": str(p_date), "評估人": p_assessor, "病人姓名": p_name, "病歷號": p_id, 
+                    "DA": ", ".join(da_list), "DS": ", ".join(ds_list), 
+                    "判定結果": " / ".join([m['result'] for m in matches]), "備註": p_note
+                }])
                 existing_data = conn.read(worksheet="Sheet1", ttl=0)
                 updated_df = pd.concat([existing_data, new_row], ignore_index=True) if existing_data is not None else new_row
                 conn.update(worksheet="Sheet1", data=updated_df)
-                st.balloons(); st.success("✅ 資料已同步至 Google Sheets")
+                st.balloons(); st.success("✅ 資料已同步至 Google Sheets (僅文字紀錄)")
             except Exception as e: st.error(f"❌ 上傳失敗: {e}")
 
-# --- 第四頁：📚 筋膜圖譜 ---
+# --- 第四頁：📚 筋膜圖譜 (維持不變) ---
 with tab4:
     st.subheader("🔍 完整筋膜解剖手冊")
-    
-    # 這裡修正了標題與新增了淺層臂線
     atlas = {
         "FF 功能線 (前+後)": ["FF1.jpg", "FF2.jpg"],
         "SBL 淺背線": ["SBL.jpg"],
@@ -145,9 +149,8 @@ with tab4:
         "DFAL 深前臂線": ["DFAL.jpg"],
         "DBAL 深後臂線": ["DBAL.jpg"]
     }
-    
     for title, imgs in atlas.items():
         with st.expander(f"📍 {title}"):
             for img_path in imgs:
                 try: st.image(f"images/{img_path}", use_container_width=True)
-                except: st.error(f"圖片遺失: images/{img_path} (請確認檔案已上傳至 GitHub)")
+                except: st.error(f"圖片遺失: images/{img_path}")
