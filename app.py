@@ -4,14 +4,17 @@ import pandas as pd
 from streamlit_gsheets import GSheetsConnection
 import plotly.graph_objects as go
 
-# 1. 基礎設定與快取優化 (離線快取邏輯)
+# 1. 基礎設定與快取優化
 st.set_page_config(page_title="KPM 筋膜評估系統", layout="centered")
 
-@st.cache_data(ttl=600)
-def fetch_data(_conn):
+# 強制讀取最新資料的函式
+def fetch_data_no_cache(_conn):
     try:
-        return _conn.read(worksheet="Sheet1", ttl=0)
-    except:
+        # 使用 ttl=0 確保抓到最新即時資料
+        df = _conn.read(worksheet="Sheet1", ttl=0)
+        return df
+    except Exception as e:
+        st.error(f"讀取資料庫失敗: {e}")
         return pd.DataFrame()
 
 # 建立連線
@@ -30,7 +33,6 @@ st.title("🩺 KPM 關鍵點評估系統")
 
 # --- 2. 核心資料定義 ---
 ACTIONS = ["CF", "CE", "CRR", "CRL", "RAU", "RAD", "LAU", "LAD", "MSF", "MSE", "MSRR", "MSRL", "MSSBR", "MSSBL", "CADS", "CR"]
-# 分數對應：DA(1), DS(2), FS(3), FA(4)
 SCORE_MAP = {"DA": 1, "DS": 2, "FS": 3, "FA": 4}
 
 TREATMENT_DATABASE = [
@@ -68,11 +70,11 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(["👤 病人資訊", "📝 快速評估"
 
 with tab1:
     st.subheader("基本資料紀錄")
-    p_name = st.text_input("病人姓名", placeholder="姓名")
-    p_id = st.text_input("病歷號/身分證號", placeholder="ID")
+    p_name = st.text_input("病人姓名", key="p_name")
+    p_id = st.text_input("病歷號/身分證號", key="p_id")
     col1, col2 = st.columns(2)
     with col1: p_date = st.date_input("評估日期", value=date.today())
-    with col2: p_assessor = st.text_input("評估人", placeholder="治療師")
+    with col2: p_assessor = st.text_input("評估人", key="p_assessor")
     p_note = st.text_area("整體臨床備註", height=100)
 
 with tab2:
@@ -104,7 +106,6 @@ with tab3:
             if m["pair"] in DEEP_PAIRS: st.warning(f"**{' + '.join(m['pair'])}** \n\n {m['result']}")
             else: st.success(f"**{' + '.join(m['pair'])}** \n\n {m['result']}")
             
-            # 圖片展開邏輯
             imgs = [v for k, v in IMAGE_MAPPING.items() if k in m['result']]
             if imgs:
                 with st.expander("🔍 檢視對應筋膜圖"):
@@ -121,22 +122,20 @@ with tab3:
             st.error("請輸入病人姓名與病歷號！")
         else:
             try:
-                # 建立新資料行，包含所有動作分數以便後續繪製雷達圖
                 record = {
-                    "日期": str(p_date), "評估人": p_assessor, "病人姓名": p_name, "病歷號": p_id,
+                    "日期": str(p_date), "評估人": p_assessor, "病人姓名": p_name, "病歷號": str(p_id), # 強制轉字串
                     "DA": ", ".join(da_list), "DS": ", ".join(ds_list),
                     "判定結果": " / ".join([m['result'] for m in matches]), "備註": p_note
                 }
-                record.update(user_scores) # 展開 16 個動作欄位
+                record.update(user_scores)
                 
                 df_new = pd.DataFrame([record])
-                df_old = fetch_data(conn)
+                df_old = fetch_data_no_cache(conn)
                 df_final = pd.concat([df_old, df_new], ignore_index=True)
                 
                 conn.update(worksheet="Sheet1", data=df_final)
-                st.cache_data.clear() # 清除快取，讓歷史頁面更新
-                st.balloons()
                 st.success("✅ 資料已同步！")
+                st.balloons()
             except Exception as e:
                 st.error(f"上傳失敗：{e}")
 
@@ -154,30 +153,45 @@ with tab4:
                 try: st.image(f"images/{img}", use_container_width=True)
                 except: st.error(f"找不到圖片: {img}")
 
+# --- 第五頁：歷史追蹤 (強化搜尋邏輯) ---
 with tab5:
     st.subheader("📈 歷史恢復追蹤")
-    search_id = st.text_input("輸入病歷號查詢歷史雷達圖")
+    search_id = st.text_input("輸入病歷號查詢歷史雷達圖 (請輸入完整 ID)", key="search_query")
+    
     if search_id:
-        all_df = fetch_data(conn)
-        if not all_df.empty and "病歷號" in all_df.columns:
-            p_history = all_df[all_df["病歷號"] == search_id].sort_values("日期")
+        all_df = fetch_data_no_cache(conn)
+        
+        if not all_df.empty:
+            # 重要：確保比較時兩邊都是字串且去除空格
+            all_df['病歷號'] = all_df['病歷號'].astype(str).str.strip()
+            target_id = str(search_id).strip()
+            
+            p_history = all_df[all_df["病歷號"] == target_id].sort_values("日期")
+            
             if not p_history.empty:
-                # 只取最近 4 次
+                st.write(f"✅ 找到 {len(p_history)} 筆紀錄")
                 recent = p_history.tail(4)
                 fig = go.Figure()
+                
                 for _, row in recent.iterrows():
-                    # 提取動作分數並轉換為 1-4
+                    # 抓取動作分數，若欄位不存在則預設 FA (4分)
                     r_vals = [SCORE_MAP.get(row.get(a, "FA"), 4) for a in ACTIONS]
-                    r_vals.append(r_vals[0]) # 閉合雷達圖
+                    r_vals.append(r_vals[0]) 
                     fig.add_trace(go.Scatterpolar(
                         r=r_vals, theta=ACTIONS + [ACTIONS[0]],
                         fill='toself', name=row['日期']
                     ))
+                
                 fig.update_layout(
                     polar=dict(radialaxis=dict(visible=True, range=[0, 4], tickvals=[1,2,3,4], ticktext=['DA','DS','FS','FA'])),
-                    title=f"病人 {search_id} 恢復趨勢"
+                    title=f"病人 {target_id} 恢復趨勢 (最近 4 次)"
                 )
                 st.plotly_chart(fig, use_container_width=True)
+                
+                st.write("📋 詳細歷史列表：")
                 st.dataframe(p_history[["日期", "判定結果", "備註"]].sort_values("日期", ascending=False))
             else:
-                st.info("查無此病歷號紀錄。")
+                st.warning(f"查無此病歷號：{target_id}")
+                st.info("提示：請確認 Excel 中的『病歷號』欄位是否有資料。")
+        else:
+            st.error("資料庫目前是空的，請先完成一次評估上傳。")
