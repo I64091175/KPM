@@ -4,20 +4,17 @@ import pandas as pd
 from streamlit_gsheets import GSheetsConnection
 import plotly.graph_objects as go
 
-# 1. 基礎網頁設定與快取設置
+# 1. 基礎設定與快取優化 (離線快取邏輯)
 st.set_page_config(page_title="KPM 筋膜評估系統", layout="centered")
 
-# 離線快取函數：圖片讀取優化
-@st.cache_data
-def get_image(path):
-    return path
-
-# 離線快取函數：Sheets 讀取優化 (每 10 分鐘更新一次或手動清除)
 @st.cache_data(ttl=600)
 def fetch_data(_conn):
-    return _conn.read(worksheet="Sheet1", ttl=0)
+    try:
+        return _conn.read(worksheet="Sheet1", ttl=0)
+    except:
+        return pd.DataFrame()
 
-# 2. 連接資料庫
+# 建立連線
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 # CSS 樣式
@@ -31,9 +28,10 @@ st.markdown("""
 
 st.title("🩺 KPM 關鍵點評估系統")
 
-# --- 3. 資料庫與參數設定 ---
+# --- 2. 核心資料定義 ---
 ACTIONS = ["CF", "CE", "CRR", "CRL", "RAU", "RAD", "LAU", "LAD", "MSF", "MSE", "MSRR", "MSRL", "MSSBR", "MSSBL", "CADS", "CR"]
-SCORE_MAP = {"FA": 4, "FS": 3, "DS": 2, "DA": 1} # 雷達圖分數化
+# 分數對應：DA(1), DS(2), FS(3), FA(4)
+SCORE_MAP = {"DA": 1, "DS": 2, "FS": 3, "FA": 4}
 
 TREATMENT_DATABASE = [
     {"pair": {"CRR", "MSRR"}, "result": "骨盆以上 右下到左上後螺旋線"},
@@ -56,7 +54,6 @@ TREATMENT_DATABASE = [
     {"pair": {"CRL", "RAD"}, "result": "右深後臂線"},
 ]
 
-DEEP_PAIRS = [{"CE", "MSE"}, {"MSRR", "MSSBL"}, {"MSRL", "MSSBR"}, {"CE", "LAU"}, {"CE", "RAU"}, {"CRR", "LAD"}, {"CRL", "RAD"}]
 IMAGE_MAPPING = {
     "螺旋線": "SPL.jpg", "後功能線": "FF1.jpg", "前功能線": "FF2.jpg",
     "淺背線": "SBL.jpg", "淺前線": "SFL.jpg", "側線": "LL.jpg",
@@ -64,109 +61,123 @@ IMAGE_MAPPING = {
     "淺前臂線": "SFAL.jpg", "淺後臂線": "SBAL.jpg"
 }
 
-# --- 4. 分頁介面 ---
-tabs = st.tabs(["👤 病人資訊", "📝 快速評估", "📊 判定結果", "📚 筋膜圖譜", "📈 歷史追蹤"])
+DEEP_PAIRS = [{"CE", "MSE"}, {"MSRR", "MSSBL"}, {"MSRL", "MSSBR"}, {"CE", "LAU"}, {"CE", "RAU"}, {"CRR", "LAD"}, {"CRL", "RAD"}]
 
-# [分頁1-4 邏輯簡化整合]
-with tabs[0]:
-    p_name = st.text_input("病人姓名")
-    p_id = st.text_input("病歷號/身分證號")
-    p_date = st.date_input("評估日期", value=date.today())
-    p_assessor = st.text_input("評估人")
-    p_note = st.text_area("備註")
+# --- 3. 介面分頁 ---
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["👤 病人資訊", "📝 快速評估", "📊 判定結果", "📚 筋膜圖譜", "📈 歷史追蹤"])
 
-with tabs[1]:
+with tab1:
+    st.subheader("基本資料紀錄")
+    p_name = st.text_input("病人姓名", placeholder="姓名")
+    p_id = st.text_input("病歷號/身分證號", placeholder="ID")
+    col1, col2 = st.columns(2)
+    with col1: p_date = st.date_input("評估日期", value=date.today())
+    with col2: p_assessor = st.text_input("評估人", placeholder="治療師")
+    p_note = st.text_area("整體臨床備註", height=100)
+
+with tab2:
+    st.info("請點選各項動作之評估等級")
     user_scores = {}
-    for act in ACTIONS:
-        user_scores[act] = st.segmented_control(act, options=["FA", "FS", "DS", "DA"], key=f"btn_{act}")
+    for i, act in enumerate(ACTIONS, 1):
+        st.markdown(f"**{i}. 動作: {act}**")
+        user_scores[act] = st.segmented_control(label=act, options=["FA", "FS", "DS", "DA"], key=f"s_{act}", selection_mode="single", label_visibility="collapsed")
+        st.divider()
 
-with tabs[2]:
+with tab3:
+    st.subheader("📊 判定結果與建議")
     da_list = [k for k, v in user_scores.items() if v == "DA"]
     ds_list = [k for k, v in user_scores.items() if v == "DS"]
-    matches = [r for r in TREATMENT_DATABASE if r["pair"].issubset(set(da_list))] or \
-              [r for r in TREATMENT_DATABASE if r["pair"].issubset(set(ds_list))]
+    
+    matches = []
+    for rule in TREATMENT_DATABASE:
+        if rule["pair"].issubset(set(da_list)): matches.append(rule)
+    if not matches:
+        for rule in TREATMENT_DATABASE:
+            if rule["pair"].issubset(set(ds_list)): matches.append(rule)
 
     if matches:
         for m in matches:
-            style = st.warning if m["pair"] in DEEP_PAIRS else st.success
-            style(f"**{' + '.join(m['pair'])}**\n\n{m['result']}")
-            img_files = [img for k, img in IMAGE_MAPPING.items() if k in m['result']]
-            if img_files:
+            style_class = "deep-header" if m["pair"] in DEEP_PAIRS else "superficial-header"
+            label = "💎 深層判定" if m["pair"] in DEEP_PAIRS else "🌿 淺層判定"
+            st.markdown(f"<div class='{style_class}'>{label}</div>", unsafe_allow_html=True)
+            
+            if m["pair"] in DEEP_PAIRS: st.warning(f"**{' + '.join(m['pair'])}** \n\n {m['result']}")
+            else: st.success(f"**{' + '.join(m['pair'])}** \n\n {m['result']}")
+            
+            # 圖片展開邏輯
+            imgs = [v for k, v in IMAGE_MAPPING.items() if k in m['result']]
+            if imgs:
                 with st.expander("🔍 檢視對應筋膜圖"):
-                    for f in img_files:
+                    for img in imgs:
                         l, mid, r = st.columns([1, 2, 1])
-                        mid.image(get_image(f"images/{f}"), use_container_width=True)
-    
-    if st.button("🚀 上傳結果"):
-        # 存檔時將每個動作的分數也存入，以便未來繪製雷達圖
-        data_to_save = {
-            "日期": str(p_date), "病人姓名": p_name, "病歷號": p_id, "評估人": p_assessor,
-            "判定結果": " / ".join([m['result'] for m in matches]), "備註": p_note
-        }
-        data_to_save.update(user_scores) # 將各動作分數存入 Excel 欄位
-        df_new = pd.DataFrame([data_to_save])
-        df_old = fetch_data(conn)
-        updated_df = pd.concat([df_old, df_new], ignore_index=True)
-        conn.update(worksheet="Sheet1", data=updated_df)
-        st.cache_data.clear() # 清除快取以刷新歷史紀錄
-        st.balloons()
+                        try: mid.image(f"images/{img}", use_container_width=True)
+                        except: mid.error(f"找不到圖片: images/{img}")
+    else:
+        st.info("目前組合尚未定義對應筋膜線。")
 
-with tabs[3]:
-    atlas = {"FF 功能線": ["FF1.jpg", "FF2.jpg"], "SBL 淺背線": ["SBL.jpg"], "SFL 淺前線": ["SFL.jpg"], "LL 側線": ["LL.jpg"], "SPL 螺旋線": ["SPL.jpg"], "DFL 深前線": ["DFL.jpg"], "SFAL 淺前臂線": ["SFAL.jpg"], "SBAL 淺後臂線": ["SBAL.jpg"], "DFAL 深前臂線": ["DFAL.jpg"], "DBAL 深後臂線": ["DBAL.jpg"]}
+    st.divider()
+    if st.button("🚀 完成評估並同步雲端"):
+        if not p_name or not p_id:
+            st.error("請輸入病人姓名與病歷號！")
+        else:
+            try:
+                # 建立新資料行，包含所有動作分數以便後續繪製雷達圖
+                record = {
+                    "日期": str(p_date), "評估人": p_assessor, "病人姓名": p_name, "病歷號": p_id,
+                    "DA": ", ".join(da_list), "DS": ", ".join(ds_list),
+                    "判定結果": " / ".join([m['result'] for m in matches]), "備註": p_note
+                }
+                record.update(user_scores) # 展開 16 個動作欄位
+                
+                df_new = pd.DataFrame([record])
+                df_old = fetch_data(conn)
+                df_final = pd.concat([df_old, df_new], ignore_index=True)
+                
+                conn.update(worksheet="Sheet1", data=df_final)
+                st.cache_data.clear() # 清除快取，讓歷史頁面更新
+                st.balloons()
+                st.success("✅ 資料已同步！")
+            except Exception as e:
+                st.error(f"上傳失敗：{e}")
+
+with tab4:
+    st.subheader("📚 筋膜解剖圖譜")
+    atlas = {
+        "FF 功能線 (前+後)": ["FF1.jpg", "FF2.jpg"], "SBL 淺背線": ["SBL.jpg"],
+        "SFL 淺前線": ["SFL.jpg"], "LL 側線": ["LL.jpg"], "SPL 螺旋線": ["SPL.jpg"],
+        "DFL 深前線": ["DFL.jpg"], "SFAL 淺前臂線": ["SFAL.jpg"], "SBAL 淺後臂線": ["SBAL.jpg"],
+        "DFAL 深前臂線": ["DFAL.jpg"], "DBAL 深後臂線": ["DBAL.jpg"]
+    }
     for title, imgs in atlas.items():
         with st.expander(f"📍 {title}"):
-            for img in imgs: st.image(get_image(f"images/{img}"), use_container_width=True)
+            for img in imgs:
+                try: st.image(f"images/{img}", use_container_width=True)
+                except: st.error(f"找不到圖片: {img}")
 
-# --- 5. 第五頁：歷史追蹤與雷達圖 ---
-with tabs[4]:
-    st.subheader("📊 歷史功能進步曲線")
-    search_id = st.text_input("輸入病歷號以查詢歷史紀錄", key="search_history")
-    
+with tab5:
+    st.subheader("📈 歷史恢復追蹤")
+    search_id = st.text_input("輸入病歷號查詢歷史雷達圖")
     if search_id:
-        history_df = fetch_data(conn)
-        # 過濾該病人的資料
-        patient_records = history_df[history_df["病歷號"] == search_id].sort_values(by="日期")
-        
-        if not patient_records.empty:
-            st.write(f"找到 {len(patient_records)} 次紀錄。正在顯示最近 4 次對比：")
-            
-            # 取得最近 4 次紀錄
-            recent_records = patient_records.tail(4)
-            
-            # 建立雷達圖
-            fig = go.Figure()
-            
-            for i, (_, row) in enumerate(recent_records.iterrows()):
-                # 將動作名稱與對應分數提取出來
-                r_values = []
-                for act in ACTIONS:
-                    val = row.get(act, "FA") # 若無紀錄則預設 FA
-                    r_values.append(SCORE_MAP.get(val, 4))
-                
-                # Plotly 雷達圖需要頭尾相連
-                r_values.append(r_values[0])
-                theta = ACTIONS + [ACTIONS[0]]
-                
-                fig.add_trace(go.Scatterpolar(
-                    r=r_values,
-                    theta=theta,
-                    fill='toself',
-                    name=f"{row['日期']}",
-                    opacity=0.6 if i < len(recent_records)-1 else 0.8
-                ))
-
-            fig.update_layout(
-                polar=dict(
-                    radialaxis=dict(visible=True, range=[0, 4], tickvals=[1, 2, 3, 4], ticktext=['DA', 'DS', 'FS', 'FA'])
-                ),
-                showlegend=True,
-                title=f"{search_id} 功能恢復雷達圖"
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # 顯示表格清單
-            st.write("📋 歷史判定詳情：")
-            st.dataframe(patient_records[["日期", "判定結果", "備註"]].sort_values(by="日期", ascending=False))
-        else:
-            st.info("尚未找到該病歷號的歷史資料。")
+        all_df = fetch_data(conn)
+        if not all_df.empty and "病歷號" in all_df.columns:
+            p_history = all_df[all_df["病歷號"] == search_id].sort_values("日期")
+            if not p_history.empty:
+                # 只取最近 4 次
+                recent = p_history.tail(4)
+                fig = go.Figure()
+                for _, row in recent.iterrows():
+                    # 提取動作分數並轉換為 1-4
+                    r_vals = [SCORE_MAP.get(row.get(a, "FA"), 4) for a in ACTIONS]
+                    r_vals.append(r_vals[0]) # 閉合雷達圖
+                    fig.add_trace(go.Scatterpolar(
+                        r=r_vals, theta=ACTIONS + [ACTIONS[0]],
+                        fill='toself', name=row['日期']
+                    ))
+                fig.update_layout(
+                    polar=dict(radialaxis=dict(visible=True, range=[0, 4], tickvals=[1,2,3,4], ticktext=['DA','DS','FS','FA'])),
+                    title=f"病人 {search_id} 恢復趨勢"
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                st.dataframe(p_history[["日期", "判定結果", "備註"]].sort_values("日期", ascending=False))
+            else:
+                st.info("查無此病歷號紀錄。")
