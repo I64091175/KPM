@@ -1,3 +1,15 @@
+# ==========================================
+# APP NAME: KPM 關鍵點評估系統
+# VERSION: 1.0 (穩定版)
+# UPDATE: 2026-04-05
+# FEATURES: 
+#   - 台灣時區 (UTC+8) 同步
+#   - 判定結果 50% 置中圖片 + 深層橘色警示盒
+#   - 備註自動合併存檔 (動作:內容/動作:內容)
+#   - 歷史追蹤: 堆疊統計圖 + 雷達圖 + 排序修復
+#   - 5 分鐘快取 (TTL=300) 避免 API 429 錯誤
+# ==========================================
+
 import streamlit as st
 from datetime import date, datetime, timedelta, timezone
 import pandas as pd
@@ -9,32 +21,38 @@ import plotly.express as px
 st.set_page_config(page_title="KPM 筋膜評估系統", layout="centered")
 tz_taiwan = timezone(timedelta(hours=8))
 
-# ✅ 修改：加入快取機制，預設快取 5 分鐘 (ttl=300)
-# 這樣在切換分頁時就不會反覆去問 Google，只有時間到或手動清除才會更新
+# 2. 核心快取邏輯 (防止 API 過載)
 @st.cache_data(ttl=300)
 def fetch_data_cached(_conn):
     try:
-        return _conn.read(worksheet="Sheet1", ttl=0) # 底層依然讀取最新，但交給 Streamlit 快取
+        return _conn.read(worksheet="Sheet1", ttl=0)
     except Exception as e:
-        st.error(f"讀取資料庫失敗 (可能是 API 繁忙): {e}")
+        st.error(f"資料庫讀取失敗 (API 繁忙中): {e}")
         return pd.DataFrame()
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# CSS 樣式
+# CSS 樣式：深淺層顏色區分與排版
 st.markdown("""
     <style>
     .stHeader { font-size: 1.2rem !important; color: #2c3e50; }
     .action-title { font-size: 1.1rem; font-weight: bold; margin-bottom: 5px; color: #1E88E5; }
     .superficial-header { color: #2E7D32; font-weight: bold; border-left: 5px solid #2E7D32; padding-left: 10px; margin-top: 20px; }
-    .deep-box { background-color: #FFF3E0; border-left: 5px solid #EF6C00; padding: 15px; border-radius: 8px; color: #BF360C; margin-bottom: 15px; }
+    .deep-box {
+        background-color: #FFF3E0;
+        border-left: 5px solid #EF6C00;
+        padding: 15px;
+        border-radius: 8px;
+        color: #BF360C;
+        margin-bottom: 15px;
+    }
     hr { margin-top: 1rem; margin-bottom: 1rem; border-bottom: 2px solid #eee; }
     </style>
     """, unsafe_allow_html=True)
 
 st.title("🩺 KPM 關鍵點評估系統")
 
-# --- 2. 核心資料定義 ---
+# --- 3. 核心資料庫與參數 ---
 ACTIONS = ["CF", "CE", "CRR", "CRL", "RAU", "RAD", "LAU", "LAD", "MSF", "MSE", "MSRR", "MSRL", "MSSBR", "MSSBL", "CADS", "CR"]
 SCORE_MAP = {"DA": 1, "DS": 2, "FS": 3, "FA": 4}
 COLOR_MAP = {"DA": "#EF553B", "DS": "#FFA15A", "FS": "#636EFA", "FA": "#00CC96"}
@@ -69,7 +87,7 @@ IMAGE_MAPPING = {
 
 DEEP_PAIRS = [{"CE", "MSE"}, {"MSRR", "MSSBL"}, {"MSRL", "MSSBR"}, {"CE", "LAU"}, {"CE", "RAU"}, {"CRR", "LAD"}, {"CRL", "RAD"}]
 
-# --- 3. 介面分頁 ---
+# --- 4. 分頁介面 ---
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["👤 病人資訊", "📝 快速評估", "📊 判定結果", "📚 筋膜圖譜", "📈 歷史追蹤"])
 
 with tab1:
@@ -79,10 +97,10 @@ with tab1:
     today_taiwan = datetime.now(tz_taiwan).date()
     p_date = st.date_input("評估日期", value=today_taiwan)
     p_assessor = st.text_input("評估人", key="p_assessor")
-    p_note = st.text_area("整體臨床總結備註", height=100)
+    p_note = st.text_area("整體臨床總結備註 (此處會與動作備註合併)", height=100)
 
 with tab2:
-    st.info("動作備註將自動串接至最後的備註欄")
+    st.info("完成動作評估後，請切換至第三頁查看結果")
     user_scores = {}
     user_action_notes = {}
     for i, act in enumerate(ACTIONS, 1):
@@ -95,70 +113,87 @@ with tab3:
     st.subheader("📊 判定結果摘要")
     da_list = [k for k, v in user_scores.items() if v == "DA"]
     ds_list = [k for k, v in user_scores.items() if v == "DS"]
-    matches = [r for r in TREATMENT_DATABASE if r["pair"].issubset(set(da_list))] or [r for r in TREATMENT_DATABASE if r["pair"].issubset(set(ds_list))]
+    
+    # 邏輯檢查：優先找 DA 組，若無則找 DS 組
+    matches = []
+    for rule in TREATMENT_DATABASE:
+        if rule["pair"].issubset(set(da_list)): matches.append(rule)
+    if not matches:
+        for rule in TREATMENT_DATABASE:
+            if rule["pair"].issubset(set(ds_list)): matches.append(rule)
 
     if matches:
         for m in matches:
             if m["pair"] in DEEP_PAIRS:
-                st.markdown(f"<div class='deep-box'><strong>💎 深層判定</strong><br>結果: {m['result']}</div>", unsafe_allow_html=True)
+                st.markdown(f"""
+                    <div class="deep-box">
+                        <strong>💎 深層判定</strong><br>
+                        動作組合: {' + '.join(sorted(list(m['pair'])))}<br><br>
+                        結果: {m['result']}
+                    </div>
+                """, unsafe_allow_html=True)
             else:
                 st.markdown("<div class='superficial-header'>🌿 淺層判定</div>", unsafe_allow_html=True)
                 st.success(f"**{' + '.join(sorted(list(m['pair'])))}** \n\n {m['result']}")
             
+            # 圖片顯示邏輯：50% 置中
             imgs = [v for k, v in IMAGE_MAPPING.items() if k in m['result']]
             if imgs:
-                with st.expander("🔍 檢視圖譜 (50%)"):
+                with st.expander("🔍 檢視對應筋膜圖 (50%)"):
                     for img in imgs:
                         l, mid, r = st.columns([1, 2, 1])
-                        mid.image(f"images/{img}", use_container_width=True)
-    
+                        try: mid.image(f"images/{img}", use_container_width=True)
+                        except: mid.error(f"找不到圖片: images/{img}")
+    else:
+        st.info("目前點選組合尚未觸發判定規則，請確認第二頁是否已評分。")
+
     st.divider()
     if st.button("🚀 完成評估並同步雲端"):
         if not p_name or not p_id:
             st.error("請輸入姓名與病歷號！")
         else:
             try:
-                # 備註合併
-                action_detail_list = [f"{act}:{user_action_notes[act].strip()}" for act in ACTIONS if user_action_notes[act].strip()]
-                combined_details = "/".join(action_detail_list)
-                final_combined_note = f"{p_note} | 詳細: {combined_details}" if p_note and combined_details else (p_note or combined_details)
+                # 1. 備註合併
+                detail_notes = [f"{a}:{user_action_notes[a].strip()}" for a in ACTIONS if user_action_notes[a].strip()]
+                combined_details = "/".join(detail_notes)
+                final_note = f"{p_note} | 詳細: {combined_details}" if p_note and combined_details else (p_note or combined_details)
 
-                # 時間邏輯
+                # 2. 自動時間
                 now_taiwan = datetime.now(tz_taiwan)
-                final_datetime_str = now_taiwan.strftime("%Y-%m-%d %H:%M") if p_date >= now_taiwan.date() else f"{p_date} (補)"
+                time_str = now_taiwan.strftime("%Y-%m-%d %H:%M") if p_date >= now_taiwan.date() else f"{p_date} (補)"
 
-                # 同步
-                record = {"日期": final_datetime_str, "評估人": p_assessor, "病人姓名": p_name, "病歷號": f"'{p_id}", "判定結果": " / ".join([m['result'] for m in matches]), "備註": final_combined_note}
+                # 3. 寫入
+                record = {"日期": time_str, "評估人": p_assessor, "病人姓名": p_name, "病歷號": f"'{p_id}", "判定結果": " / ".join([m['result'] for m in matches]), "備註": final_note}
                 record.update(user_scores)
                 
-                # ✅ 這裡需要「先讀取最新的」來合併，所以這裡不使用快取
-                df_old = conn.read(worksheet="Sheet1", ttl=0) 
+                df_old = conn.read(worksheet="Sheet1", ttl=0) # 寫入時強制讀取最新
                 df_final = pd.concat([df_old, pd.DataFrame([record])], ignore_index=True)
                 conn.update(worksheet="Sheet1", data=df_final)
                 
-                # ✅ 重點：同步成功後清除快取，這樣下次讀取（包括歷史分頁）就會看到新的
-                st.cache_data.clear() 
-                st.success(f"✅ 已同步！時間：{final_datetime_str}"); st.balloons()
+                st.cache_data.clear() # 更新完清除快取
+                st.success(f"✅ 資料已同步！({time_str})"); st.balloons()
             except Exception as e:
-                st.error(f"同步失敗：{e}")
+                st.error(f"同步失敗: {e}")
 
 with tab4:
-    st.subheader("📚 完整筋膜解譜圖")
-    atlas = {"FF 功能線 (前+後)": ["FF1.jpg", "FF2.jpg"], "SBL 淺背線": ["SBL.jpg"], "SFL 淺前線": ["SFL.jpg"], "LL 側線": ["LL.jpg"], "SPL 螺旋線": ["SPL.jpg"], "DFL 深前線": ["DFL.jpg"], "SFAL 淺前臂線": ["SFAL.jpg"], "SBAL 淺後臂線": ["SBAL.jpg"], "DFAL 深前臂線": ["DFAL.jpg"], "DBAL 深後臂線": ["DBAL.jpg"]}
+    st.subheader("📚 完整筋膜解剖圖譜")
+    atlas = {
+        "FF 功能線 (前+後)": ["FF1.jpg", "FF2.jpg"], "SBL 淺背線": ["SBL.jpg"], "SFL 淺前線": ["SFL.jpg"], 
+        "LL 側線": ["LL.jpg"], "SPL 螺旋線": ["SPL.jpg"], "DFL 深前線": ["DFL.jpg"], 
+        "SFAL 淺前臂線": ["SFAL.jpg"], "SBAL 淺後臂線": ["SBAL.jpg"], 
+        "DFAL 深前臂線": ["DFAL.jpg"], "DBAL 深後臂線": ["DBAL.jpg"]
+    }
     for title, imgs in atlas.items():
         with st.expander(f"📍 {title}"):
             for img in imgs: st.image(f"images/{img}", use_container_width=True)
 
 with tab5:
-    st.subheader("📈 歷史恢復趨勢")
-    # ✅ 加入一個手動重新整理按鈕，以防快取沒更新
-    if st.button("🔄 重新整理資料庫"):
-        st.cache_data.clear()
-        st.rerun()
+    st.subheader("📈 歷史恢復趨勢分析")
+    if st.button("🔄 重新整理資料庫 (清除快取)"):
+        st.cache_data.clear(); st.rerun()
 
     search_id = st.text_input("輸入病歷號查詢歷史紀錄", key="q_id")
     if search_id:
-        # 使用快取讀取
         all_df = fetch_data_cached(conn)
         if not all_df.empty:
             all_df.columns = [str(c).strip() for c in all_df.columns]
@@ -167,14 +202,14 @@ with tab5:
                 p_history = all_df[all_df["病歷號"] == str(search_id).strip()].copy()
                 
                 if not p_history.empty:
+                    # 排序修正
                     p_history['sort_date'] = pd.to_datetime(p_history['日期'].str.replace(" (補)", "", regex=False), errors='coerce')
                     p_history = p_history.sort_values("sort_date")
                     
-                    count = len(p_history)
-                    st.success(f"找到 {count} 筆紀錄。")
+                    st.success(f"找到 {len(p_history)} 筆紀錄，顯示最近 4 次對比：")
                     recent = p_history.tail(4)
                     
-                    # 統計圖
+                    # 統計堆疊圖
                     stats_list = []
                     for _, row in recent.iterrows():
                         counts = {"DA": 0, "DS": 0, "FS": 0, "FA": 0}
@@ -183,8 +218,7 @@ with tab5:
                             if v in counts: counts[v] += 1
                         for lvl, cnt in counts.items(): stats_list.append({"日期": row["日期"], "等級": lvl, "次數": cnt})
                     
-                    fig_bar = px.bar(pd.DataFrame(stats_list), x="日期", y="次數", color="等級", color_discrete_map=COLOR_MAP, category_orders={"等級": ["DA", "DS", "FS", "FA"]}, text_auto=True)
-                    st.plotly_chart(fig_bar, use_container_width=True)
+                    st.plotly_chart(px.bar(pd.DataFrame(stats_list), x="日期", y="次數", color="等級", color_discrete_map=COLOR_MAP, category_orders={"等級": ["DA", "DS", "FS", "FA"]}, text_auto=True), use_container_width=True)
 
                     # 雷達圖
                     fig_radar = go.Figure()
@@ -194,5 +228,7 @@ with tab5:
                     fig_radar.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 4], tickvals=[1,2,3,4], ticktext=['DA','DS','FS','FA'])))
                     st.plotly_chart(fig_radar, use_container_width=True)
 
-                    st.dataframe(p_history.sort_values("sort_date", ascending=False)[["日期", "判定結果", "備註"]])
+                    # 歷史清單：先排好再顯示
+                    p_display = p_history.sort_values("sort_date", ascending=False)
+                    st.dataframe(p_display[["日期", "判定結果", "備註"]])
                 else: st.warning("查無資料。")
