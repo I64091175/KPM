@@ -17,6 +17,24 @@ import pandas as pd
 from streamlit_gsheets import GSheetsConnection
 import plotly.graph_objects as go
 import plotly.express as px
+import streamlit as st
+import google.generativeai as genai
+
+# 初始化 Gemini API
+try:
+    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+    model = genai.GenerativeModel('gemini-1.5-flash')
+except Exception as e:
+    st.error("API 金鑰未設定或設定錯誤，請檢查 secrets.toml")
+
+
+# 測試區塊：檢查 API 是否運作
+if st.sidebar.button("測試 AI 連線"):
+    try:
+        response = model.generate_content("請回覆：連線成功")
+        st.sidebar.success(response.text)
+    except Exception as e:
+        st.sidebar.error(f"連線失敗: {e}")
 
 # 1. 基礎設定與時區
 st.set_page_config(page_title="KPM 筋膜評估系統 V1.1", layout="centered")
