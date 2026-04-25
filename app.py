@@ -7,8 +7,8 @@ import plotly.express as px
 
 # ==========================================
 # APP NAME: KPM 關鍵點評估系統
-# VERSION: 1.2 (SOP 邏輯與排序校正版)
-# BASE: V1.1 原始地基
+# VERSION: 1.2 (正式修復版)
+# BASE: V1.1 穩定地基
 # UPDATE: 2026-04-25
 # ==========================================
 
@@ -26,23 +26,22 @@ def fetch_data_no_cache(_conn):
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# CSS 樣式：恢復 V1.1 標準配色 [cite: 75-81]
+# CSS 樣式：嚴格遵循顏色規範 [cite: 75-81]
 st.markdown("""
     <style>
     .action-title { font-size: 1.1rem; font-weight: bold; margin-bottom: 5px; color: #1E88E5; }
-    .superficial-header { color: #2E7D32; font-weight: bold; border-left: 5px solid #2E7D32; padding-left: 10px; margin-top: 20px; margin-bottom: 5px; }
+    .superficial-header { color: #2E7D32; font-weight: bold; border-left: 5px solid #2E7D32; padding-left: 10px; margin-top: 20px; }
     .superficial-box { border: 2px solid #2E7D32; padding: 15px; border-radius: 8px; background-color: #F1F8E9; margin-bottom: 10px; color: #1B5E20; }
     .deep-box { background-color: #FFF3E0; border-left: 5px solid #EF6C00; padding: 15px; border-radius: 8px; color: #BF360C; margin-bottom: 10px; }
     .priority-box { background-color: #F3E5F5; border: 2px solid #7B1FA2; padding: 15px; border-radius: 8px; color: #4A148C; margin-bottom: 15px; font-weight: bold; }
     .muscle-text { font-weight: bold; color: #D84315; margin-top: 5px; }
     .ankle-box { background-color: #E3F2FD; padding: 15px; border-radius: 8px; border: 2px solid #1E88E5; color: #000000; margin-top: 20px; font-weight: bold; }
-    hr { margin-top: 1rem; margin-bottom: 1rem; border-bottom: 2px solid #eee; }
     </style>
     """, unsafe_allow_html=True)
 
 st.title("🩺 KPM 關鍵點評估系統 V1.2")
 
-# --- 2. 核心資料定義 (嚴格對照 SOP) --- 
+# --- 2. 核心資料定義 --- [cite: 50-67, 81-83]
 ACTIONS = ["CF", "CE", "CRR", "CRL", "CR", "RAU", "RAD", "LAU", "LAD", "MSF", "MSE", "MSRR", "MSRL", "MSSBR", "MSSBL", "CADS"]
 SCORE_MAP = {"DA": 1, "DS": 2, "FS": 3, "FA": 4}
 COLOR_MAP = {"DA": "#EF553B", "DS": "#FFA15A", "FS": "#636EFA", "FA": "#00CC96"}
@@ -84,12 +83,13 @@ with tab1:
 
 with tab2:
     st.info("請標註評估等級。核心受限請點選 ⭐ 加權。")
-    user_scores, user_priorities = {}, {}
+    user_scores, user_action_notes, user_priorities = {}, {}, {}
     for i, act in enumerate(ACTIONS, 1):
         st.markdown(f"<div class='action-title'>{i}. 動作: {act}</div>", unsafe_allow_html=True)
         c1, c2 = st.columns([3, 1])
         user_scores[act] = c1.segmented_control(label=act, options=["FA", "FS", "DS", "DA"], key=f"s_{act}", selection_mode="single", label_visibility="collapsed")
         user_priorities[act] = c2.checkbox("⭐ 加權", key=f"prio_{act}")
+        user_action_notes[act] = st.text_input(f"備註 ({act})", key=f"note_{act}") # 恢復備註欄 
         st.divider()
 
 with tab3:
@@ -108,18 +108,17 @@ with tab3:
     for rule in TREATMENT_DATABASE:
         s1, s2 = user_scores.get(list(rule["pair"])[0]), user_scores.get(list(rule["pair"])[1])
         if s1 and s2 and s1 == s2 and s1 in ["DA", "DS"]:
-            item = {**rule, "grade": s1, "is_prio": not rule["pair"].isdisjoint(set(priority_list))}
+            item = {**rule, "is_prio": not rule["pair"].isdisjoint(set(priority_list))}
             if item["is_prio"]: weighted_res.append(item)
             elif s1 == "DA": da_da_res.append(item)
             else: ds_ds_res.append(item)
 
-    # 輔助函數：顯示區塊 (淺層優先)
-    def display_group(res_list, title):
+    # 輔助函數：顯示區塊 (淺層優先排序)
+    def display_results(res_list, title):
         if res_list:
             if title: st.markdown(f"### {title}")
-            # 排序：淺層=0, 深層=1, 最後處理=2
-            depth_order = {"淺層": 0, "深層": 1, "最後處理": 2}
-            for res in sorted(res_list, key=lambda x: depth_order.get(x["depth"], 1)):
+            depth_rank = {"淺層": 0, "深層": 1, "最後處理": 2}
+            for res in sorted(res_list, key=lambda x: depth_rank.get(x["depth"], 1)):
                 pair_str = " + ".join(sorted(list(res["pair"])))
                 if res["is_prio"]:
                     st.markdown(f"<div class='priority-box'>🌟 加權重點項目<br>動作組合: {pair_str} ({res['depth']})<br>結果: {res['result']}<br><div class='muscle-text'>💪 建議處理肌肉: {res['muscles']}</div></div>", unsafe_allow_html=True)
@@ -128,37 +127,63 @@ with tab3:
                 else:
                     st.markdown(f"<div class='deep-box'><strong>💎 深層判定</strong><br>動作組合: {pair_str}<br>結果: {res['result']}<br><div class='muscle-text'>💪 建議處理肌肉: {res['muscles']}</div></div>", unsafe_allow_html=True)
                 
-                # 圖片自動顯示 [cite: 94-95]
+                # 自動顯示圖片 [cite: 94-95]
                 imgs = [v for k, v in IMAGE_MAPPING.items() if k in res['result']]
                 if imgs:
                     with st.expander(f"🔍 檢視圖譜: {res['result']}"):
                         for img in imgs: st.image(f"images/{img}", width=350)
 
-    # 按順序顯示 
-    display_group(weighted_res, "⭐ 加權重點對應")
-    display_group(da_da_res, "🟦 DA-DA 對應結果")
-    display_group(ds_ds_res, "🟧 DS-DS 對應結果")
+    # 依序渲染三大區塊
+    display_results(weighted_res, "⭐ 加權重點對應")
+    display_results(da_da_res, "🟦 DA-DA 對應結果")
+    display_results(ds_ds_res, "🟧 DS-DS 對應結果")
 
-    # 3. 踝部加測 (放在最後) [cite: 62-63]
-    all_matched_pairs = [" + ".join(sorted(list(r["pair"]))) for r in weighted_res + da_da_res + ds_ds_res]
+    # 踝部加測區塊 (置底) [cite: 62-63]
+    all_pairs = [" + ".join(sorted(list(r["pair"]))) for r in weighted_res + da_da_res + ds_ds_res]
     for p_str in ["MSRR + MSSBL", "MSRL + MSSBR"]:
-        if p_str in all_matched_pairs:
+        if p_str in all_pairs:
             st.markdown(f"<div class='ankle-box'>🔍 偵測到 {p_str} 相對應，請加測：</div>", unsafe_allow_html=True)
             side = "右" if "MSRR" in p_str else "左"
             opp = "左" if side == "右" else "右"
             if st.checkbox(f"{side}踝內翻受限 (處理{side}側線)", key=f"ak1_{p_str}"): st.info(f"💡 建議處理：{side}側線 (淺層)")
             if st.checkbox(f"{opp}踝外翻受限 (處理{opp}深前線)", key=f"ak2_{p_str}"): st.info(f"💡 建議處理：{opp}深前線 (深層)")
 
-    if st.button("🚀 完成評估並同步雲端"): st.success("✅ 同步成功！"); st.balloons()
+    st.divider()
+    if st.button("🚀 完成評估並同步雲端"):
+        if not p_name or not p_id:
+            st.error("請輸入姓名與病歷號！")
+        else:
+            try:
+                # 恢復寫入邏輯 [cite: 96-101]
+                act_notes = [f"{a}:{user_action_notes[a].strip()}" for a in ACTIONS if user_action_notes[a].strip()]
+                prio_tags = [f"{a}(⭐)" for a in priority_list]
+                combined_details = "/".join(act_notes + prio_tags)
+                final_note = f"{p_note} | 詳細: {combined_details}" if p_note and combined_details else (p_note or combined_details)
+                now_tw = datetime.now(tz_taiwan)
+                final_dt_str = now_tw.strftime("%Y-%m-%d %H:%M") if p_date >= now_tw.date() else f"{p_date} (補)"
 
-with tab4: # [cite: 102]
+                record = {
+                    "日期": final_dt_str, "評估人": p_assessor, "病人姓名": p_name, "病歷號": f"'{p_id}",
+                    "病人自覺分數": vas_score, "加權關鍵點": ", ".join(priority_list),
+                    "判定結果": " / ".join([res['result'] for res in weighted_res + da_da_res + ds_ds_res]), 
+                    "備註": final_note
+                }
+                record.update(user_scores)
+                df_old = fetch_data_no_cache(conn)
+                df_final = pd.concat([df_old, pd.DataFrame([record])], ignore_index=True)
+                conn.update(worksheet="Sheet1", data=df_final) # 核心寫入指令
+                st.success(f"✅ 資料已同步至 Google Sheets！時間：{final_dt_str}"); st.balloons()
+            except Exception as e:
+                st.error(f"同步失敗: {e}")
+
+with tab4:
     st.subheader("📚 完整解剖圖譜")
     atlas = {"FF 功能線": ["FF1.jpg", "FF2.jpg"], "SBL 淺背線": ["SBL.jpg"], "SFL 淺前線": ["SFL.jpg"], "LL 側線": ["LL.jpg"], "SPL 螺旋線": ["SPL.jpg"], "DFL 深前線": ["DFL.jpg"], "手臂線系列": ["SFAL.jpg", "SBAL.jpg", "DFAL.jpg", "DBAL.jpg"]}
     for title, imgs in atlas.items():
         with st.expander(f"📍 {title}"):
             for img in imgs: st.image(f"images/{img}", use_container_width=True)
 
-with tab5: # 恢復 V1.1 歷史追蹤功能 
+with tab5: # 恢復 V1.1 歷史功能 
     st.subheader("📈 歷史趨勢分析")
     search_id = st.text_input("輸入病歷號查詢歷史紀錄")
     if search_id:
@@ -169,5 +194,23 @@ with tab5: # 恢復 V1.1 歷史追蹤功能
             if not p_history.empty:
                 p_history['sort_dt'] = pd.to_datetime(p_history['日期'].str.replace(" (補)", ""), errors='coerce')
                 p_history = p_history.sort_values("sort_dt")
-                st.plotly_chart(px.bar(p_history, x="日期", y="病人自覺分數", color_discrete_sequence=["#1E88E5"], text_auto=True))
+                st.success(f"找到 {len(p_history)} 筆紀錄。")
+                recent = p_history.tail(4)
+                
+                stats_list = []
+                for _, row in recent.iterrows():
+                    counts = {"DA": 0, "DS": 0, "FS": 0, "FA": 0}
+                    for a in ACTIONS:
+                        v = str(row.get(a, "")).strip()
+                        if v in counts: counts[v] += 1
+                    for lvl, cnt in counts.items(): stats_list.append({"日期": row["日期"], "等級": lvl, "次數": cnt})
+                
+                st.plotly_chart(px.bar(pd.DataFrame(stats_list), x="日期", y="次數", color="等級", color_discrete_map=COLOR_MAP, category_orders={"等級": ["DA", "DS", "FS", "FA"]}, text_auto=True))
+                
+                fig_radar = go.Figure()
+                for _, row in recent.iterrows():
+                    r_vals = [SCORE_MAP.get(str(row.get(a, "FA")).strip(), 4) for a in ACTIONS]; r_vals.append(r_vals[0])
+                    fig_radar.add_trace(go.Scatterpolar(r=r_vals, theta=ACTIONS + [ACTIONS[0]], fill='toself', name=str(row['日期'])))
+                fig_radar.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 4], tickvals=[1,2,3,4], ticktext=['DA','DS','FS','FA'])))
+                st.plotly_chart(fig_radar, use_container_width=True)
                 st.dataframe(p_history.sort_values("sort_dt", ascending=False)[["日期", "判定結果", "備註"]])
