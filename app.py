@@ -7,12 +7,12 @@ import plotly.express as px
 
 # ==========================================
 # APP NAME: KPM 關鍵點評估系統
-# VERSION: 1.2 (正式修復版)
-# BASE: V1.1 穩定地基
+# VERSION: 1.2 (歷史功能優化版)
+# BASE: V1.2 正式修復版 (保留 1-4 頁)
 # UPDATE: 2026-04-25
 # ==========================================
 
-# 1. 基礎設定
+# 1. 基礎設定 (Tab 1-4 核心邏輯保持不變)
 st.set_page_config(page_title="KPM 筋膜評估系統 V1.2", layout="centered")
 tz_taiwan = timezone(timedelta(hours=8))
 
@@ -26,7 +26,7 @@ def fetch_data_no_cache(_conn):
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# CSS 樣式：嚴格遵循顏色規範 [cite: 75-81]
+# CSS 樣式 (保留 V1.1/V1.2 原有樣式)
 st.markdown("""
     <style>
     .action-title { font-size: 1.1rem; font-weight: bold; margin-bottom: 5px; color: #1E88E5; }
@@ -36,12 +36,14 @@ st.markdown("""
     .priority-box { background-color: #F3E5F5; border: 2px solid #7B1FA2; padding: 15px; border-radius: 8px; color: #4A148C; margin-bottom: 15px; font-weight: bold; }
     .muscle-text { font-weight: bold; color: #D84315; margin-top: 5px; }
     .ankle-box { background-color: #E3F2FD; padding: 15px; border-radius: 8px; border: 2px solid #1E88E5; color: #000000; margin-top: 20px; font-weight: bold; }
+    /* 新增：末次評估提示框樣式 */
+    .last-record-box { background-color: #E8F5E9; border: 2px solid #2E7D32; padding: 20px; border-radius: 12px; margin-bottom: 20px; }
     </style>
     """, unsafe_allow_html=True)
 
 st.title("🩺 KPM 關鍵點評估系統 V1.2")
 
-# --- 2. 核心資料定義 --- [cite: 50-67, 81-83]
+# --- 2. 核心資料定義與判定邏輯 (Tab 1-4 使用) ---
 ACTIONS = ["CF", "CE", "CRR", "CRL", "CR", "RAU", "RAD", "LAU", "LAD", "MSF", "MSE", "MSRR", "MSRL", "MSSBR", "MSSBL", "CADS"]
 SCORE_MAP = {"DA": 1, "DS": 2, "FS": 3, "FA": 4}
 COLOR_MAP = {"DA": "#EF553B", "DS": "#FFA15A", "FS": "#636EFA", "FA": "#00CC96"}
@@ -69,7 +71,7 @@ TREATMENT_DATABASE = [
 
 IMAGE_MAPPING = {"螺旋線": "SPL.jpg", "後功能線": "FF1.jpg", "前功能線": "FF2.jpg", "淺背線": "SBL.jpg", "側線": "LL.jpg", "深前線": "DFL.jpg", "深前臂線": "DFAL.jpg", "深後臂線": "DBAL.jpg"}
 
-# --- 3. 介面分頁 ---
+# --- 3. 介面分頁 (1-4 頁代碼完全保留) ---
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["👤 病人資訊", "📝 快速評估", "📊 判定結果", "📚 筋膜圖譜", "📈 歷史追蹤"])
 
 with tab1:
@@ -89,7 +91,7 @@ with tab2:
         c1, c2 = st.columns([3, 1])
         user_scores[act] = c1.segmented_control(label=act, options=["FA", "FS", "DS", "DA"], key=f"s_{act}", selection_mode="single", label_visibility="collapsed")
         user_priorities[act] = c2.checkbox("⭐ 加權", key=f"prio_{act}")
-        user_action_notes[act] = st.text_input(f"備註 ({act})", key=f"note_{act}") # 恢復備註欄 
+        user_action_notes[act] = st.text_input(f"備註 ({act})", key=f"note_{act}")
         st.divider()
 
 with tab3:
@@ -103,7 +105,6 @@ with tab3:
         if priority_list: st.write(f"🌟 **關鍵加權點:** {', '.join(priority_list)}")
         st.divider()
 
-    # 邏輯分類
     weighted_res, da_da_res, ds_ds_res = [], [], []
     for rule in TREATMENT_DATABASE:
         s1, s2 = user_scores.get(list(rule["pair"])[0]), user_scores.get(list(rule["pair"])[1])
@@ -113,7 +114,6 @@ with tab3:
             elif s1 == "DA": da_da_res.append(item)
             else: ds_ds_res.append(item)
 
-    # 輔助函數：顯示區塊 (淺層優先排序)
     def display_results(res_list, title):
         if res_list:
             if title: st.markdown(f"### {title}")
@@ -126,19 +126,15 @@ with tab3:
                     st.markdown(f"<div class='superficial-header'>🌿 淺層判定</div><div class='superficial-box'><b>動作組合: {pair_str}</b><br>結果: {res['result']}<br><div class='muscle-text'>💪 建議處理肌肉: {res['muscles']}</div></div>", unsafe_allow_html=True)
                 else:
                     st.markdown(f"<div class='deep-box'><strong>💎 深層判定</strong><br>動作組合: {pair_str}<br>結果: {res['result']}<br><div class='muscle-text'>💪 建議處理肌肉: {res['muscles']}</div></div>", unsafe_allow_html=True)
-                
-                # 自動顯示圖片 [cite: 94-95]
                 imgs = [v for k, v in IMAGE_MAPPING.items() if k in res['result']]
                 if imgs:
                     with st.expander(f"🔍 檢視圖譜: {res['result']}"):
                         for img in imgs: st.image(f"images/{img}", width=350)
 
-    # 依序渲染三大區塊
     display_results(weighted_res, "⭐ 加權重點對應")
     display_results(da_da_res, "🟦 DA-DA 對應結果")
     display_results(ds_ds_res, "🟧 DS-DS 對應結果")
 
-    # 踝部加測區塊 (置底) [cite: 62-63]
     all_pairs = [" + ".join(sorted(list(r["pair"]))) for r in weighted_res + da_da_res + ds_ds_res]
     for p_str in ["MSRR + MSSBL", "MSRL + MSSBR"]:
         if p_str in all_pairs:
@@ -154,24 +150,17 @@ with tab3:
             st.error("請輸入姓名與病歷號！")
         else:
             try:
-                # 恢復寫入邏輯 [cite: 96-101]
                 act_notes = [f"{a}:{user_action_notes[a].strip()}" for a in ACTIONS if user_action_notes[a].strip()]
                 prio_tags = [f"{a}(⭐)" for a in priority_list]
                 combined_details = "/".join(act_notes + prio_tags)
                 final_note = f"{p_note} | 詳細: {combined_details}" if p_note and combined_details else (p_note or combined_details)
                 now_tw = datetime.now(tz_taiwan)
                 final_dt_str = now_tw.strftime("%Y-%m-%d %H:%M") if p_date >= now_tw.date() else f"{p_date} (補)"
-
-                record = {
-                    "日期": final_dt_str, "評估人": p_assessor, "病人姓名": p_name, "病歷號": f"'{p_id}",
-                    "病人自覺分數": vas_score, "加權關鍵點": ", ".join(priority_list),
-                    "判定結果": " / ".join([res['result'] for res in weighted_res + da_da_res + ds_ds_res]), 
-                    "備註": final_note
-                }
+                record = {"日期": final_dt_str, "評估人": p_assessor, "病人姓名": p_name, "病歷號": f"'{p_id}", "病人自覺分數": vas_score, "加權關鍵點": ", ".join(priority_list), "判定結果": " / ".join([res['result'] for res in weighted_res + da_da_res + ds_ds_res]), "備註": final_note}
                 record.update(user_scores)
                 df_old = fetch_data_no_cache(conn)
                 df_final = pd.concat([df_old, pd.DataFrame([record])], ignore_index=True)
-                conn.update(worksheet="Sheet1", data=df_final) # 核心寫入指令
+                conn.update(worksheet="Sheet1", data=df_final)
                 st.success(f"✅ 資料已同步至 Google Sheets！時間：{final_dt_str}"); st.balloons()
             except Exception as e:
                 st.error(f"同步失敗: {e}")
@@ -183,34 +172,53 @@ with tab4:
         with st.expander(f"📍 {title}"):
             for img in imgs: st.image(f"images/{img}", use_container_width=True)
 
-with tab5: # 恢復 V1.1 歷史功能 
-    st.subheader("📈 歷史趨勢分析")
-    search_id = st.text_input("輸入病歷號查詢歷史紀錄")
+# --- 4. 修改後之 Tab 5 歷史功能 (僅針對此部分進行更動) ---
+with tab5:
+    st.subheader("📈 歷史恢復趨勢分析")
+    search_id = st.text_input("🔍 輸入病歷號查詢歷史紀錄", key="q_id_v12")
+    
     if search_id:
-        df = fetch_data_no_cache(conn)
-        if not df.empty:
-            df['病歷號'] = df['病歷號'].astype(str).str.lstrip("'").str.strip()
-            p_history = df[df["病歷號"] == search_id].copy()
+        all_df = fetch_data_no_cache(conn)
+        
+        if not all_df.empty:
+            # 格式清洗與篩選
+            all_df['病歷號'] = all_df['病歷號'].astype(str).str.lstrip("'").str.strip()
+            p_history = all_df[all_df["病歷號"] == str(search_id).strip()].copy()
+            
             if not p_history.empty:
+                # 排序資料，確保獲取最新評估
                 p_history['sort_dt'] = pd.to_datetime(p_history['日期'].str.replace(" (補)", ""), errors='coerce')
                 p_history = p_history.sort_values("sort_dt")
-                st.success(f"找到 {len(p_history)} 筆紀錄。")
-                recent = p_history.tail(4)
                 
-                stats_list = []
-                for _, row in recent.iterrows():
-                    counts = {"DA": 0, "DS": 0, "FS": 0, "FA": 0}
-                    for a in ACTIONS:
-                        v = str(row.get(a, "")).strip()
-                        if v in counts: counts[v] += 1
-                    for lvl, cnt in counts.items(): stats_list.append({"日期": row["日期"], "等級": lvl, "次數": cnt})
+                # --- 新增功能：顯示末次評估 DA/DS 狀況 ---
+                last_record = p_history.iloc[-1]  # 獲取最後一筆紀錄
                 
-                st.plotly_chart(px.bar(pd.DataFrame(stats_list), x="日期", y="次數", color="等級", color_discrete_map=COLOR_MAP, category_orders={"等級": ["DA", "DS", "FS", "FA"]}, text_auto=True))
+                st.markdown("### 📋 該病患末次評估核心狀況")
+                st.markdown(f"""
+                    <div class="last-record-box">
+                        <b>🕙 最近評估時間：</b> {last_record['日期']}<br>
+                        <b>🛑 上次判定結果 (DA/DS)：</b><br>
+                        <span style='color: #D84315; font-size: 1.1rem;'>{last_record['判定結果']}</span><br><br>
+                        <b>📝 上次治療備註：</b><br>
+                        {last_record['備註']}
+                    </div>
+                """, unsafe_allow_html=True)
                 
-                fig_radar = go.Figure()
-                for _, row in recent.iterrows():
-                    r_vals = [SCORE_MAP.get(str(row.get(a, "FA")).strip(), 4) for a in ACTIONS]; r_vals.append(r_vals[0])
-                    fig_radar.add_trace(go.Scatterpolar(r=r_vals, theta=ACTIONS + [ACTIONS[0]], fill='toself', name=str(row['日期'])))
-                fig_radar.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 4], tickvals=[1,2,3,4], ticktext=['DA','DS','FS','FA'])))
-                st.plotly_chart(fig_radar, use_container_width=True)
-                st.dataframe(p_history.sort_values("sort_dt", ascending=False)[["日期", "判定結果", "備註"]])
+                # 保留長條圖：自覺分數變化
+                st.markdown("### 🤒 自覺分數趨勢")
+                recent = p_history.tail(6) # 顯示最近 6 次趨勢
+                fig_bar = px.bar(recent, x="日期", y="病人自覺分數", 
+                                 color_discrete_sequence=["#1E88E5"], 
+                                 text_auto=True, 
+                                 title="病患疼痛自覺量表 (VAS) 演變")
+                st.plotly_chart(fig_bar, use_container_width=True)
+
+                # 列表顯示完整歷史
+                with st.expander("📂 展開完整歷史明細"):
+                    st.dataframe(p_history.sort_values("sort_dt", ascending=False)[["日期", "判定結果", "病人自覺分數", "備註"]])
+                
+            else:
+                # 找不到該病歷號之顯示
+                st.error("找不到此病歷號")
+        else:
+            st.warning("資料庫目前為空，請先上傳資料。")
