@@ -7,8 +7,8 @@ import plotly.express as px
 
 # ==========================================
 # APP NAME: KPM 關鍵點評估系統
-# VERSION: 1.2 (歷史追蹤與 Excel 同步優化版)
-# BASE: V1.2 正式修復版
+# VERSION: 1.2 (同步紀錄優化版)
+# BASE: V1.2 正式版
 # UPDATE: 2026-04-25
 # ==========================================
 
@@ -60,11 +60,28 @@ TREATMENT_DATABASE = [
     {"pair": {"CE", "LAU"}, "result": "左深前臂線", "muscles": "左深前臂線", "depth": "深層"},
     {"pair": {"CE", "RAU"}, "result": "右深前臂線", "muscles": "右深前臂線", "depth": "深層"},
     {"pair": {"CRR", "LAD"}, "result": "左深後臂線", "muscles": "左深後臂線", "depth": "深層"},
-    {"pair": {"CRL", "RAD"}, "right_result": "右深後臂線", "muscles": "右深後臂線", "depth": "深層"}
+    {"pair": {"CRL", "RAD"}, "result": "右深後臂線", "muscles": "右深後臂線", "depth": "深層"}
 ]
 IMAGE_MAPPING = {"螺旋線": "SPL.jpg", "後功能線": "FF1.jpg", "前功能線": "FF2.jpg", "淺背線": "SBL.jpg", "側線": "LL.jpg", "深前線": "DFL.jpg", "深前臂線": "DFAL.jpg", "深後臂線": "DBAL.jpg"}
 
-# --- 3. 介面分頁 (1-4 頁保持不變) ---
+def display_ui_common(res_list, title):
+    if res_list:
+        if title: st.markdown(f"### {title}")
+        depth_rank = {"淺層": 0, "深層": 1, "最後處理": 2}
+        for res in sorted(res_list, key=lambda x: depth_rank.get(x["depth"], 1)):
+            pair_str = " + ".join(sorted(list(res["pair"])))
+            if res["is_prio"]:
+                st.markdown(f"<div class='priority-box'>🌟 加權重點項目<br>動作組合: {pair_str} ({res['depth']})<br>結果: {res['result']}<br><div class='muscle-text'>💪 建議處理肌肉: {res['muscles']}</div></div>", unsafe_allow_html=True)
+            elif res["depth"] == "淺層":
+                st.markdown(f"<div class='superficial-header'>🌿 淺層判定</div><div class='superficial-box'><b>動作組合: {pair_str}</b><br>結果: {res['result']}<br><div class='muscle-text'>💪 建議處理肌肉: {res['muscles']}</div></div>", unsafe_allow_html=True)
+            else:
+                st.markdown(f"<div class='deep-box'><strong>💎 深層判定</strong><br>動作組合: {pair_str}<br>結果: {res['result']}<br><div class='muscle-text'>💪 建議處理肌肉: {res['muscles']}</div></div>", unsafe_allow_html=True)
+            imgs = [v for k, v in IMAGE_MAPPING.items() if k in res['result']]
+            if imgs:
+                with st.expander(f"🔍 檢視圖譜"):
+                    for img in imgs: st.image(f"images/{img}", width=350)
+
+# --- 3. 介面分頁 ---
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["👤 病人資訊", "📝 快速評估", "📊 判定結果", "📚 筋膜圖譜", "📈 歷史追蹤"])
 
 with tab1:
@@ -107,43 +124,38 @@ with tab3:
             elif s1 == "DA": da_da_res.append(item)
             else: ds_ds_res.append(item)
 
-    def display_ui(res_list, title):
-        if res_list:
-            if title: st.markdown(f"### {title}")
-            depth_rank = {"淺層": 0, "深層": 1, "最後處理": 2}
-            for res in sorted(res_list, key=lambda x: depth_rank.get(x["depth"], 1)):
-                pair_str = " + ".join(sorted(list(res["pair"])))
-                if res["is_prio"]:
-                    st.markdown(f"<div class='priority-box'>🌟 加權重點項目<br>動作組合: {pair_str} ({res['depth']})<br>結果: {res['result']}<br><div class='muscle-text'>💪 建議處理肌肉: {res['muscles']}</div></div>", unsafe_allow_html=True)
-                elif res["depth"] == "淺層":
-                    st.markdown(f"<div class='superficial-header'>🌿 淺層判定</div><div class='superficial-box'><b>動作組合: {pair_str}</b><br>結果: {res['result']}<br><div class='muscle-text'>💪 建議處理肌肉: {res['muscles']}</div></div>", unsafe_allow_html=True)
-                else:
-                    st.markdown(f"<div class='deep-box'><strong>💎 深層判定</strong><br>動作組合: {pair_str}<br>結果: {res['result']}<br><div class='muscle-text'>💪 建議處理肌肉: {res['muscles']}</div></div>", unsafe_allow_html=True)
-                imgs = [v for k, v in IMAGE_MAPPING.items() if k in res['result']]
-                if imgs:
-                    with st.expander(f"🔍 檢視圖譜"):
-                        for img in imgs: st.image(f"images/{img}", width=350)
+    display_ui_common(weighted_res, "⭐ 加權重點對應")
+    display_ui_common(da_da_res, "🟦 DA-DA 對應結果")
+    display_ui_common(ds_ds_res, "🟧 DS-DS 對應結果")
 
-    display_ui(weighted_res, "⭐ 加權重點對應")
-    display_ui(da_da_res, "🟦 DA-DA 對應結果")
-    display_ui(ds_ds_res, "🟧 DS-DS 對應結果")
-
-    ankle_note_to_save = ""
+    # 動態紀錄加測結果
+    selected_ankle_options = []
     all_pairs = [" + ".join(sorted(list(r["pair"]))) for r in weighted_res + da_da_res + ds_ds_res]
     for p_str in ["MSRR + MSSBL", "MSRL + MSSBR"]:
         if p_str in all_pairs:
             st.markdown(f"<div class='ankle-box'>🔍 偵測到 {p_str} 相對應，請加測：</div>", unsafe_allow_html=True)
-            ankle_note_to_save = f"偵測到 {p_str} 相對應，請加測："
             side = "右" if "MSRR" in p_str else "左"
             opp = "左" if side == "右" else "右"
-            if st.checkbox(f"{side}踝內翻受限 (處理{side}側線)", key=f"sync_ak1_{p_str}"): st.info(f"💡 建議處理：{side}側線 (淺層)")
-            if st.checkbox(f"{opp}踝外翻受限 (處理{opp}深前線)", key=f"sync_ak2_{p_str}"): st.info(f"💡 建議處理：{opp}深前線 (深層)")
+            
+            l1, l2 = f"{side}踝內翻受限 (處理{side}側線)", f"{opp}踝外翻受限 (處理{opp}深前線)"
+            if st.checkbox(l1, key=f"save_ak1_{p_str}"): selected_ankle_options.append(l1)
+            if st.checkbox(l2, key=f"save_ak2_{p_str}"): selected_ankle_options.append(l2)
 
     st.divider()
     if st.button("🚀 完成評估並同步雲端"):
         if not p_name or not p_id: st.error("請輸入姓名與病歷號！")
         else:
             try:
+                # 整合加測建議紀錄 
+                ankle_final_str = ""
+                triggered_ankle_pairs = [p for p in ["MSRR + MSSBL", "MSRL + MSSBR"] if p in all_pairs]
+                if triggered_ankle_pairs:
+                    base_prompt = f"偵測到 {'、'.join(triggered_ankle_pairs)} 相對應。"
+                    if selected_ankle_options:
+                        ankle_final_str = f"{base_prompt}加測結果：{'、'.join(selected_ankle_options)}"
+                    else:
+                        ankle_final_str = f"{base_prompt}尚未勾選加測結果。"
+
                 act_notes = [f"{a}:{user_action_notes[a].strip()}" for a in ACTIONS if user_action_notes[a].strip()]
                 prio_tags = [f"{a}(⭐)" for a in priority_list]
                 combined_details = "/".join(act_notes + prio_tags)
@@ -151,13 +163,11 @@ with tab3:
                 now_tw = datetime.now(tz_taiwan)
                 final_dt_str = now_tw.strftime("%Y-%m-%d %H:%M") if p_date >= now_tw.date() else f"{p_date} (補)"
                 
-                # 同步資料時新增「加測建議」欄位
                 record = {
                     "日期": final_dt_str, "評估人": p_assessor, "病人姓名": p_name, "病歷號": f"'{p_id}",
                     "病人自覺分數": vas_score, "加權關鍵點": ", ".join(priority_list),
                     "判定結果": " / ".join([res['result'] for res in weighted_res + da_da_res + ds_ds_res]), 
-                    "備註": final_note,
-                    "加測建議": ankle_note_to_save # 新增欄位
+                    "備註": final_note, "加測建議": ankle_final_str # 紀錄具體選項
                 }
                 record.update(user_scores)
                 df_old = fetch_data_no_cache(conn)
@@ -173,7 +183,6 @@ with tab4:
         with st.expander(f"📍 {title}"):
             for img in imgs: st.image(f"images/{img}", use_container_width=True)
 
-# --- 4. 修改後之 Tab 5 歷史追蹤 (重點優化部分) ---
 with tab5:
     st.subheader("📈 歷史評估狀態導覽")
     search_id = st.text_input("🔍 輸入病歷號查詢歷史紀錄", key="q_id_v12_final")
@@ -189,10 +198,8 @@ with tab5:
                 p_history = p_history.sort_values("sort_dt")
                 last_record = p_history.iloc[-1]
                 
-                # 重新構建上次評估的判定結果
                 st.markdown(f"<div class='hist-title'>📋 末次評估詳情 ({last_record['日期']})</div>", unsafe_allow_html=True)
                 
-                # 提取當次分數與加權點以進行比對
                 last_scores = {a: last_record.get(a, "FA") for a in ACTIONS}
                 last_priorities = str(last_record.get("加權關鍵點", "")).split(", ")
                 
@@ -206,22 +213,22 @@ with tab5:
                         elif s1 == "DA": h_da.append(item)
                         else: h_ds.append(item)
 
-                # 按 Tab 3 方式顯示
-                display_ui(h_weighted, "⭐ 上次加權重點")
-                display_ui(h_da, "🟦 上次 DA-DA 對應")
-                display_ui(h_ds, "🟧 上次 DS-DS 對應")
+                display_ui_common(h_weighted, "⭐ 上次加權重點")
+                display_ui_common(h_da, "🟦 上次 DA-DA 對應")
+                display_ui_common(h_ds, "🟧 上次 DS-DS 對應")
                 
-                # 顯示加測記錄
                 if "加測建議" in last_record and pd.notna(last_record["加測建議"]) and last_record["加測建議"] != "":
-                    st.markdown(f"<div class='ankle-box'>ℹ️ 歷史紀錄提示：<br>{last_record['加測建議']}</div>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='ankle-box'>ℹ️ 歷史紀錄加測結果：<br>{last_record['加測建議']}</div>", unsafe_allow_html=True)
 
                 st.divider()
                 st.markdown("### 🤒 疼痛分數演變趨勢")
-                st.plotly_chart(px.bar(p_history.tail(6), x="日期", y="病人自覺分數", color_discrete_sequence=["#1E88E5"], text_auto=True))
+                fig_bar = px.bar(p_history.tail(6), x="日期", y="病人自覺分數", color_discrete_sequence=["#1E88E5"], text_auto=True)
+                fig_bar.update_layout(xaxis_type='category') # 修正時間軸問題
+                st.plotly_chart(fig_bar, use_container_width=True)
                 
                 with st.expander("📂 查看所有歷史筆記"):
-                    st.dataframe(p_history.sort_values("sort_dt", ascending=False)[["日期", "判定結果", "加測建議", "備註"]])
-            else:
-                st.error("找不到此病歷號")
-        else:
-            st.warning("資料庫目前為空。")
+                    display_cols = ["日期", "判定結果", "病人自覺分數", "備註"]
+                    if "加測建議" in p_history.columns: display_cols.insert(2, "加測建議")
+                    st.dataframe(p_history.sort_values("sort_dt", ascending=False)[display_cols])
+            else: st.error("找不到此病歷號")
+        else: st.warning("資料庫目前為空。")
