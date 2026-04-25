@@ -7,26 +7,24 @@ import plotly.express as px
 
 # ==========================================
 # APP NAME: KPM 關鍵點評估系統
-# VERSION: 1.2 (歷史功能優化版)
-# BASE: V1.2 正式修復版 (保留 1-4 頁)
+# VERSION: 1.2 (歷史追蹤與 Excel 同步優化版)
+# BASE: V1.2 正式修復版
 # UPDATE: 2026-04-25
 # ==========================================
 
-# 1. 基礎設定 (Tab 1-4 核心邏輯保持不變)
+# 1. 基礎設定
 st.set_page_config(page_title="KPM 筋膜評估系統 V1.2", layout="centered")
 tz_taiwan = timezone(timedelta(hours=8))
 
 def fetch_data_no_cache(_conn):
     try:
         return _conn.read(worksheet="Sheet1", ttl=0)
-    except Exception as e:
-        if "429" in str(e):
-            st.error("⚠️ 系統連線繁忙，請等候約 60 秒後重新整理網頁。")
+    except:
         return pd.DataFrame()
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# CSS 樣式 (保留 V1.1/V1.2 原有樣式)
+# CSS 樣式：確保高度能見度 [cite: 75-81]
 st.markdown("""
     <style>
     .action-title { font-size: 1.1rem; font-weight: bold; margin-bottom: 5px; color: #1E88E5; }
@@ -36,18 +34,14 @@ st.markdown("""
     .priority-box { background-color: #F3E5F5; border: 2px solid #7B1FA2; padding: 15px; border-radius: 8px; color: #4A148C; margin-bottom: 15px; font-weight: bold; }
     .muscle-text { font-weight: bold; color: #D84315; margin-top: 5px; }
     .ankle-box { background-color: #E3F2FD; padding: 15px; border-radius: 8px; border: 2px solid #1E88E5; color: #000000; margin-top: 20px; font-weight: bold; }
-    /* 新增：末次評估提示框樣式 */
-    .last-record-box { background-color: #E8F5E9; border: 2px solid #2E7D32; padding: 20px; border-radius: 12px; margin-bottom: 20px; }
+    .hist-title { font-size: 1.3rem; font-weight: bold; color: #2c3e50; margin-top: 30px; }
     </style>
     """, unsafe_allow_html=True)
 
 st.title("🩺 KPM 關鍵點評估系統 V1.2")
 
-# --- 2. 核心資料定義與判定邏輯 (Tab 1-4 使用) ---
+# --- 2. 核心資料定義 --- [cite: 50-67, 81-83]
 ACTIONS = ["CF", "CE", "CRR", "CRL", "CR", "RAU", "RAD", "LAU", "LAD", "MSF", "MSE", "MSRR", "MSRL", "MSSBR", "MSSBL", "CADS"]
-SCORE_MAP = {"DA": 1, "DS": 2, "FS": 3, "FA": 4}
-COLOR_MAP = {"DA": "#EF553B", "DS": "#FFA15A", "FS": "#636EFA", "FA": "#00CC96"}
-
 TREATMENT_DATABASE = [
     {"pair": {"CRR", "MSRR"}, "result": "螺旋線 / 骨盆以上 右下到左上後螺旋線", "muscles": "左頭頰、右菱形、右前鉅", "depth": "深層"},
     {"pair": {"CRL", "MSRL"}, "result": "螺旋線 / 骨盆以上 左下到右上後螺旋線", "muscles": "右頭頰、左菱形、左前鉅", "depth": "深層"},
@@ -66,12 +60,11 @@ TREATMENT_DATABASE = [
     {"pair": {"CE", "LAU"}, "result": "左深前臂線", "muscles": "左深前臂線", "depth": "深層"},
     {"pair": {"CE", "RAU"}, "result": "右深前臂線", "muscles": "右深前臂線", "depth": "深層"},
     {"pair": {"CRR", "LAD"}, "result": "左深後臂線", "muscles": "左深後臂線", "depth": "深層"},
-    {"pair": {"CRL", "RAD"}, "result": "右深後臂線", "muscles": "右深後臂線", "depth": "深層"}
+    {"pair": {"CRL", "RAD"}, "right_result": "右深後臂線", "muscles": "右深後臂線", "depth": "深層"}
 ]
-
 IMAGE_MAPPING = {"螺旋線": "SPL.jpg", "後功能線": "FF1.jpg", "前功能線": "FF2.jpg", "淺背線": "SBL.jpg", "側線": "LL.jpg", "深前線": "DFL.jpg", "深前臂線": "DFAL.jpg", "深後臂線": "DBAL.jpg"}
 
-# --- 3. 介面分頁 (1-4 頁代碼完全保留) ---
+# --- 3. 介面分頁 (1-4 頁保持不變) ---
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["👤 病人資訊", "📝 快速評估", "📊 判定結果", "📚 筋膜圖譜", "📈 歷史追蹤"])
 
 with tab1:
@@ -109,12 +102,12 @@ with tab3:
     for rule in TREATMENT_DATABASE:
         s1, s2 = user_scores.get(list(rule["pair"])[0]), user_scores.get(list(rule["pair"])[1])
         if s1 and s2 and s1 == s2 and s1 in ["DA", "DS"]:
-            item = {**rule, "is_prio": not rule["pair"].isdisjoint(set(priority_list))}
+            item = {**rule, "grade": s1, "is_prio": not rule["pair"].isdisjoint(set(priority_list))}
             if item["is_prio"]: weighted_res.append(item)
             elif s1 == "DA": da_da_res.append(item)
             else: ds_ds_res.append(item)
 
-    def display_results(res_list, title):
+    def display_ui(res_list, title):
         if res_list:
             if title: st.markdown(f"### {title}")
             depth_rank = {"淺層": 0, "深層": 1, "最後處理": 2}
@@ -128,26 +121,27 @@ with tab3:
                     st.markdown(f"<div class='deep-box'><strong>💎 深層判定</strong><br>動作組合: {pair_str}<br>結果: {res['result']}<br><div class='muscle-text'>💪 建議處理肌肉: {res['muscles']}</div></div>", unsafe_allow_html=True)
                 imgs = [v for k, v in IMAGE_MAPPING.items() if k in res['result']]
                 if imgs:
-                    with st.expander(f"🔍 檢視圖譜: {res['result']}"):
+                    with st.expander(f"🔍 檢視圖譜"):
                         for img in imgs: st.image(f"images/{img}", width=350)
 
-    display_results(weighted_res, "⭐ 加權重點對應")
-    display_results(da_da_res, "🟦 DA-DA 對應結果")
-    display_results(ds_ds_res, "🟧 DS-DS 對應結果")
+    display_ui(weighted_res, "⭐ 加權重點對應")
+    display_ui(da_da_res, "🟦 DA-DA 對應結果")
+    display_ui(ds_ds_res, "🟧 DS-DS 對應結果")
 
+    ankle_note_to_save = ""
     all_pairs = [" + ".join(sorted(list(r["pair"]))) for r in weighted_res + da_da_res + ds_ds_res]
     for p_str in ["MSRR + MSSBL", "MSRL + MSSBR"]:
         if p_str in all_pairs:
             st.markdown(f"<div class='ankle-box'>🔍 偵測到 {p_str} 相對應，請加測：</div>", unsafe_allow_html=True)
+            ankle_note_to_save = f"偵測到 {p_str} 相對應，請加測："
             side = "右" if "MSRR" in p_str else "左"
             opp = "左" if side == "右" else "右"
-            if st.checkbox(f"{side}踝內翻受限 (處理{side}側線)", key=f"ak1_{p_str}"): st.info(f"💡 建議處理：{side}側線 (淺層)")
-            if st.checkbox(f"{opp}踝外翻受限 (處理{opp}深前線)", key=f"ak2_{p_str}"): st.info(f"💡 建議處理：{opp}深前線 (深層)")
+            if st.checkbox(f"{side}踝內翻受限 (處理{side}側線)", key=f"sync_ak1_{p_str}"): st.info(f"💡 建議處理：{side}側線 (淺層)")
+            if st.checkbox(f"{opp}踝外翻受限 (處理{opp}深前線)", key=f"sync_ak2_{p_str}"): st.info(f"💡 建議處理：{opp}深前線 (深層)")
 
     st.divider()
     if st.button("🚀 完成評估並同步雲端"):
-        if not p_name or not p_id:
-            st.error("請輸入姓名與病歷號！")
+        if not p_name or not p_id: st.error("請輸入姓名與病歷號！")
         else:
             try:
                 act_notes = [f"{a}:{user_action_notes[a].strip()}" for a in ACTIONS if user_action_notes[a].strip()]
@@ -156,14 +150,21 @@ with tab3:
                 final_note = f"{p_note} | 詳細: {combined_details}" if p_note and combined_details else (p_note or combined_details)
                 now_tw = datetime.now(tz_taiwan)
                 final_dt_str = now_tw.strftime("%Y-%m-%d %H:%M") if p_date >= now_tw.date() else f"{p_date} (補)"
-                record = {"日期": final_dt_str, "評估人": p_assessor, "病人姓名": p_name, "病歷號": f"'{p_id}", "病人自覺分數": vas_score, "加權關鍵點": ", ".join(priority_list), "判定結果": " / ".join([res['result'] for res in weighted_res + da_da_res + ds_ds_res]), "備註": final_note}
+                
+                # 同步資料時新增「加測建議」欄位
+                record = {
+                    "日期": final_dt_str, "評估人": p_assessor, "病人姓名": p_name, "病歷號": f"'{p_id}",
+                    "病人自覺分數": vas_score, "加權關鍵點": ", ".join(priority_list),
+                    "判定結果": " / ".join([res['result'] for res in weighted_res + da_da_res + ds_ds_res]), 
+                    "備註": final_note,
+                    "加測建議": ankle_note_to_save # 新增欄位
+                }
                 record.update(user_scores)
                 df_old = fetch_data_no_cache(conn)
                 df_final = pd.concat([df_old, pd.DataFrame([record])], ignore_index=True)
                 conn.update(worksheet="Sheet1", data=df_final)
-                st.success(f"✅ 資料已同步至 Google Sheets！時間：{final_dt_str}"); st.balloons()
-            except Exception as e:
-                st.error(f"同步失敗: {e}")
+                st.success(f"✅ 資料已同步！時間：{final_dt_str}"); st.balloons()
+            except Exception as e: st.error(f"同步失敗: {e}")
 
 with tab4:
     st.subheader("📚 完整解剖圖譜")
@@ -172,53 +173,55 @@ with tab4:
         with st.expander(f"📍 {title}"):
             for img in imgs: st.image(f"images/{img}", use_container_width=True)
 
-# --- 4. 修改後之 Tab 5 歷史功能 (僅針對此部分進行更動) ---
+# --- 4. 修改後之 Tab 5 歷史追蹤 (重點優化部分) ---
 with tab5:
-    st.subheader("📈 歷史恢復趨勢分析")
-    search_id = st.text_input("🔍 輸入病歷號查詢歷史紀錄", key="q_id_v12")
+    st.subheader("📈 歷史評估狀態導覽")
+    search_id = st.text_input("🔍 輸入病歷號查詢歷史紀錄", key="q_id_v12_final")
     
     if search_id:
         all_df = fetch_data_no_cache(conn)
-        
         if not all_df.empty:
-            # 格式清洗與篩選
             all_df['病歷號'] = all_df['病歷號'].astype(str).str.lstrip("'").str.strip()
             p_history = all_df[all_df["病歷號"] == str(search_id).strip()].copy()
             
             if not p_history.empty:
-                # 排序資料，確保獲取最新評估
                 p_history['sort_dt'] = pd.to_datetime(p_history['日期'].str.replace(" (補)", ""), errors='coerce')
                 p_history = p_history.sort_values("sort_dt")
+                last_record = p_history.iloc[-1]
                 
-                # --- 新增功能：顯示末次評估 DA/DS 狀況 ---
-                last_record = p_history.iloc[-1]  # 獲取最後一筆紀錄
+                # 重新構建上次評估的判定結果
+                st.markdown(f"<div class='hist-title'>📋 末次評估詳情 ({last_record['日期']})</div>", unsafe_allow_html=True)
                 
-                st.markdown("### 📋 該病患末次評估核心狀況")
-                st.markdown(f"""
-                    <div class="last-record-box">
-                        <b>🕙 最近評估時間：</b> {last_record['日期']}<br>
-                        <b>🛑 上次判定結果 (DA/DS)：</b><br>
-                        <span style='color: #D84315; font-size: 1.1rem;'>{last_record['判定結果']}</span><br><br>
-                        <b>📝 上次治療備註：</b><br>
-                        {last_record['備註']}
-                    </div>
-                """, unsafe_allow_html=True)
+                # 提取當次分數與加權點以進行比對
+                last_scores = {a: last_record.get(a, "FA") for a in ACTIONS}
+                last_priorities = str(last_record.get("加權關鍵點", "")).split(", ")
                 
-                # 保留長條圖：自覺分數變化
-                st.markdown("### 🤒 自覺分數趨勢")
-                recent = p_history.tail(6) # 顯示最近 6 次趨勢
-                fig_bar = px.bar(recent, x="日期", y="病人自覺分數", 
-                                 color_discrete_sequence=["#1E88E5"], 
-                                 text_auto=True, 
-                                 title="病患疼痛自覺量表 (VAS) 演變")
-                st.plotly_chart(fig_bar, use_container_width=True)
+                h_weighted, h_da, h_ds = [], [], []
+                for rule in TREATMENT_DATABASE:
+                    acts = list(rule["pair"])
+                    s1, s2 = last_scores.get(acts[0]), last_scores.get(acts[1])
+                    if s1 and s2 and s1 == s2 and s1 in ["DA", "DS"]:
+                        item = {**rule, "is_prio": not rule["pair"].isdisjoint(set(last_priorities))}
+                        if item["is_prio"]: h_weighted.append(item)
+                        elif s1 == "DA": h_da.append(item)
+                        else: h_ds.append(item)
 
-                # 列表顯示完整歷史
-                with st.expander("📂 展開完整歷史明細"):
-                    st.dataframe(p_history.sort_values("sort_dt", ascending=False)[["日期", "判定結果", "病人自覺分數", "備註"]])
+                # 按 Tab 3 方式顯示
+                display_ui(h_weighted, "⭐ 上次加權重點")
+                display_ui(h_da, "🟦 上次 DA-DA 對應")
+                display_ui(h_ds, "🟧 上次 DS-DS 對應")
                 
+                # 顯示加測記錄
+                if "加測建議" in last_record and pd.notna(last_record["加測建議"]) and last_record["加測建議"] != "":
+                    st.markdown(f"<div class='ankle-box'>ℹ️ 歷史紀錄提示：<br>{last_record['加測建議']}</div>", unsafe_allow_html=True)
+
+                st.divider()
+                st.markdown("### 🤒 疼痛分數演變趨勢")
+                st.plotly_chart(px.bar(p_history.tail(6), x="日期", y="病人自覺分數", color_discrete_sequence=["#1E88E5"], text_auto=True))
+                
+                with st.expander("📂 查看所有歷史筆記"):
+                    st.dataframe(p_history.sort_values("sort_dt", ascending=False)[["日期", "判定結果", "加測建議", "備註"]])
             else:
-                # 找不到該病歷號之顯示
                 st.error("找不到此病歷號")
         else:
-            st.warning("資料庫目前為空，請先上傳資料。")
+            st.warning("資料庫目前為空。")
