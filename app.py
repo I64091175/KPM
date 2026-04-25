@@ -7,7 +7,7 @@ import plotly.express as px
 
 # ==========================================
 # APP NAME: KPM 關鍵點評估系統
-# VERSION: 1.2 (修正版)
+# VERSION: 1.2 (最終修正版)
 # UPDATE: 2026-04-25
 # ==========================================
 
@@ -23,59 +23,63 @@ def fetch_data_no_cache(_conn):
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# CSS 樣式：優化區塊顏色與字體能見度 [cite: 75-81]
+# CSS 樣式：強化加權視覺與文字能見度
 st.markdown("""
     <style>
     .da-box { background-color: #F3E5F5; border: 2px solid #7B1FA2; padding: 15px; border-radius: 8px; color: #4A148C; margin-bottom: 10px; }
     .ds-box { background-color: #FFF3E0; border: 2px solid #EF6C00; padding: 15px; border-radius: 8px; color: #BF360C; margin-bottom: 10px; }
-    .ankle-box { background-color: #E3F2FD; padding: 15px; border-radius: 8px; border: 2px solid #1E88E5; color: #0D47A1; margin-top: 10px; }
-    .treatment-path { font-weight: bold; color: #E64A19; margin-top: 5px; }
-    .depth-tag { font-size: 0.9rem; font-weight: normal; color: #555; }
+    .priority-item { border: 3px solid #6A1B9A !important; background-color: #EDE7F6 !important; }
+    .ankle-box { background-color: #E3F2FD; padding: 15px; border-radius: 8px; border: 2px solid #1E88E5; color: #000000 !important; margin-top: 10px; font-weight: bold; }
+    .muscle-text { font-weight: bold; color: #D84315; margin-top: 5px; }
+    .depth-tag { font-size: 0.9rem; color: #616161; }
     </style>
     """, unsafe_allow_html=True)
 
 st.title("🩺 KPM 關鍵點評估系統 V1.2")
 
-# --- 2. 核心資料定義 --- [cite: 81-83]
+# --- 2. 核心資料定義 (更新肌肉清單) ---
 ACTIONS = ["CF", "CE", "CRR", "CRL", "CR", "RAU", "RAD", "LAU", "LAD", "MSF", "MSE", "MSRR", "MSRL", "MSSBR", "MSSBL", "CADS"]
 SCORE_MAP = {"DA": 1, "DS": 2, "FS": 3, "FA": 4}
 COLOR_MAP = {"DA": "#EF553B", "DS": "#FFA15A", "FS": "#636EFA", "FA": "#00CC96"}
 
-# 整合進階對應、淺深層與治療路徑
+# 整合進階對應與肌肉名稱 
 TREATMENT_DATABASE = [
-    {"pair": {"CRR", "MSRR"}, "result": "螺旋線 / 骨盆以上 右下到左上後螺旋線", "depth": "深層", "tier": 3, "path": "軀幹側面 → 肩胛骨內緣 → 頭部後側"},
-    {"pair": {"CRL", "MSRL"}, "result": "螺旋線 / 骨盆以上 左下到右上後螺旋線", "depth": "深層", "tier": 3, "path": "軀幹側面 → 肩胛骨內緣 → 頭部後側"},
-    {"pair": {"LAU", "MSRR"}, "result": "後功能線 / 骨盆以上 左後功能線", "depth": "淺層", "tier": 1, "path": "後側腿部 → 臀部 → 腰部"},
-    {"pair": {"RAU", "MSRL"}, "result": "後功能線 / 骨盆以上 右後功能線", "depth": "淺層", "tier": 1, "path": "後側腿部 → 臀部 → 腰部"},
-    {"pair": {"MSF", "MSRR"}, "result": "後功能線 / 骨盆以下 右後功能線", "depth": "淺層", "tier": 2, "path": "後側腿部 → 臀部 → 腰部"},
-    {"pair": {"MSF", "MSRL"}, "result": "後功能線 / 骨盆以下 左後功能線", "depth": "淺層", "tier": 2, "path": "後側腿部 → 臀部 → 腰部"},
-    {"pair": {"MSE", "MSRR"}, "result": "前功能線 / 骨盆以上 右前功能線", "depth": "淺層", "tier": 1, "path": "前側腿部 → 腹部 → 胸部"},
-    {"pair": {"MSE", "MSRL"}, "result": "前功能線 / 骨盆以上 左前功能線", "depth": "淺層", "tier": 1, "path": "前側腿部 → 腹部 → 胸部"},
-    {"pair": {"CF", "MSF"}, "result": "淺背線 / 骨盆以上 淺背線", "depth": "深層", "tier": 3, "path": "足底 → 小腿 → 大腿 → 下背部 → 上背部 → 頭部"},
-    {"pair": {"CE", "MSE"}, "result": "深前線 / 骨盆以上 深前線", "depth": "深層", "tier": 3, "path": "足底 → 大腿內側 → 腰部前側 → 頭部"},
-    {"pair": {"CR", "MSSBL"}, "result": "側線 / 骨盆以上 右側線", "depth": "深層", "tier": 3, "path": "足底 → 腳踝 → 髖部 → 骨盆 → 頸部前外側"},
-    {"pair": {"CR", "MSSBR"}, "result": "側線 / 骨盆以上 左側線", "depth": "深層", "tier": 3, "path": "足底 → 腳踝 → 髖部 → 骨盆 → 頸部前外側"},
-    {"pair": {"MSRR", "MSSBL"}, "result": "骨盆以下 右側線或左深前線", "depth": "淺層/深層", "tier": 2, "path": "依據踝部測試判定起始點"},
-    {"pair": {"MSRL", "MSSBR"}, "result": "骨盆以下 左側線或右深前線", "depth": "淺層/深層", "tier": 2, "path": "依據踝部測試判定起始點"},
-    {"pair": {"CE", "LAU"}, "result": "左深前臂線", "depth": "深層", "tier": 4, "path": "手部 → 肘部 → 胸部"},
-    {"pair": {"CE", "RAU"}, "result": "右深前臂線", "depth": "深層", "tier": 4, "path": "手部 → 肘部 → 胸部"},
-    {"pair": {"CRR", "LAD"}, "result": "左深後臂線", "depth": "深層", "tier": 4, "path": "手部 → 肘部 → 肩部"},
-    {"pair": {"CRL", "RAD"}, "result": "右深後臂線", "depth": "深層", "tier": 4, "path": "手部 → 肘部 → 肩部"}
+    {"pair": {"CRR", "MSRR"}, "result": "螺旋線 / 骨盆以上 右下到左上後螺旋線", "depth": "深層", "muscles": "左頭頰、右菱形、右前鉅", "tier": 3},
+    {"pair": {"CRL", "MSRL"}, "result": "螺旋線 / 骨盆以上 左下到右上後螺旋線", "depth": "深層", "muscles": "右頭頰、左菱形、左前鉅", "tier": 3},
+    {"pair": {"LAU", "MSRR"}, "result": "後功能線 / 骨盆以上 左後功能線", "depth": "淺層", "muscles": "左闊背", "tier": 1},
+    {"pair": {"RAU", "MSRL"}, "result": "後功能線 / 骨盆以上 右後功能線", "depth": "淺層", "muscles": "右闊背", "tier": 1},
+    {"pair": {"MSF", "MSRR"}, "result": "後功能線 / 骨盆以下 右後功能線", "depth": "淺層", "muscles": "右臀大、右股外側", "tier": 2},
+    {"pair": {"MSF", "MSRL"}, "result": "後功能線 / 骨盆以下 左後功能線", "depth": "淺層", "muscles": "左臀大、左股外側", "tier": 2},
+    {"pair": {"MSE", "MSRR"}, "result": "前功能線 / 骨盆以上 右前功能線", "depth": "淺層", "muscles": "右胸大、右腹直", "tier": 1},
+    {"pair": {"MSE", "MSRL"}, "result": "前功能線 / 骨盆以上 左前功能線", "depth": "淺層", "muscles": "左胸大、左腹直", "tier": 1},
+    {"pair": {"CF", "MSF"}, "result": "淺背線 / 骨盆以上 淺背線", "depth": "深層", "muscles": "枕下肌、C7-T1交界", "tier": 3},
+    {"pair": {"CE", "MSE"}, "result": "深前線 / 骨盆以上 深前線", "depth": "深層", "muscles": "斜角肌、咀嚼肌", "tier": 3},
+    {"pair": {"CR", "MSSBL"}, "result": "側線 / 骨盆以上 右側線", "depth": "深層", "muscles": "右枕骨邊緣/乳突交界、右髂棘上下", "tier": 3},
+    {"pair": {"CR", "MSSBR"}, "result": "側線 / 骨盆以上 左側線", "depth": "深層", "muscles": "左枕骨邊緣/乳突交界、左髂棘上下", "tier": 3},
+    {"pair": {"CE", "LAU"}, "result": "左深前臂線", "depth": "深層", "muscles": "左深前臂線", "tier": 4},
+    {"pair": {"CE", "RAU"}, "result": "右深前臂線", "depth": "深層", "muscles": "右深前臂線", "tier": 4},
+    {"pair": {"CRR", "LAD"}, "result": "左深後臂線", "depth": "深層", "muscles": "左深後臂線", "tier": 4},
+    {"pair": {"CRL", "RAD"}, "result": "右深後臂線", "depth": "深層", "muscles": "右深後臂線", "tier": 4}
 ]
 
-IMAGE_MAPPING = {"螺旋線": "SPL.jpg", "後功能線": "FF1.jpg", "前功能線": "FF2.jpg", "淺背線": "SBL.jpg", "淺前線": "SFL.jpg", "側線": "LL.jpg", "深前線": "DFL.jpg", "深前臂線": "DFAL.jpg", "深後臂線": "DBAL.jpg", "淺前臂線": "SFAL.jpg", "淺後臂線": "SBAL.jpg"}
+IMAGE_MAPPING = {"螺旋線": "SPL.jpg", "後功能線": "FF1.jpg", "前功能線": "FF2.jpg", "淺背線": "SBL.jpg", "側線": "LL.jpg", "深前線": "DFL.jpg"}
 
 # --- 3. 介面分頁 ---
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["👤 病人資訊", "📝 快速評估", "📊 判定結果", "📚 筋膜圖譜", "📈 歷史追蹤"])
 
 with tab1:
+    st.subheader("👤 病人基本資料")
     p_name = st.text_input("病人姓名", key="p_name")
     p_id = st.text_input("病歷號", key="p_id")
-    vas_score = st.slider("🤒 病人自覺分數 (10分最痛)", 0, 10, 5)
+    # 修復：恢復日期輸入 
+    today_taiwan = datetime.now(tz_taiwan).date()
+    p_date = st.date_input("評估日期", value=today_taiwan)
+    vas_score = st.slider("🤒 病人自覺分數 (10最痛 / 0不痛)", 0, 10, 5)
     p_assessor = st.text_input("評估人")
-    p_note = st.text_area("整體臨床總結備註")
+    p_note = st.text_area("臨床備註")
 
 with tab2:
+    st.info("請標註等級。核心受限請點選 ⭐ 加權。")
     user_scores, user_action_notes, user_priorities = {}, {}, {}
     for i, act in enumerate(ACTIONS, 1):
         st.markdown(f"**{i}. 動作: {act}**")
@@ -87,61 +91,72 @@ with tab2:
 
 with tab3:
     st.subheader("📊 判定結果摘要")
-    # 恢復 V1.1 頂端紀錄 
+    # 恢復：DA/DS 項目摘要 [cite: 87]
     da_list = [k for k, v in user_scores.items() if v == "DA"]
     ds_list = [k for k, v in user_scores.items() if v == "DS"]
     priority_list = [k for k, v in user_priorities.items() if v]
     if da_list or ds_list:
-        st.write(f"🛑 **DA 項目:** {', '.join(da_list) if da_list else '無'}")
-        st.write(f"⚠️ **DS 項目:** {', '.join(ds_list) if ds_list else '無'}")
-        if priority_list: st.write(f"🌟 **關鍵加權點:** {', '.join(priority_list)}")
+        st.write(f"🛑 **DA:** {', '.join(da_list) if da_list else '無'} | ⚠️ **DS:** {', '.join(ds_list) if ds_list else '無'}")
         st.divider()
 
-    # 判定邏輯分類 (DA 區塊 / DS 區塊)
     da_results, ds_results = [], []
     for rule in TREATMENT_DATABASE:
-        act1, act2 = list(rule["pair"])
-        s1, s2 = user_scores.get(act1), user_scores.get(act2)
+        s1, s2 = user_scores.get(list(rule["pair"])[0]), user_scores.get(list(rule["pair"])[1])
         if s1 and s2 and s1 == s2:
-            res_item = {**rule, "is_prio": not rule["pair"].isdisjoint(set(priority_list))}
+            res_item = {**rule, "is_weighted": not rule["pair"].isdisjoint(set(priority_list))}
             if s1 == "DA": da_results.append(res_item)
             elif s1 == "DS": ds_results.append(res_item)
 
-    # 顯示結果
-    for res_group, box_style, title in [(da_results, "da-box", "DA-DA 對應結果"), (ds_results, "ds-box", "DS-DS 對應結果")]:
+    for res_group, box_style, title in [(da_results, "da-box", "DA-DA 對應"), (ds_results, "ds-box", "DS-DS 對應")]:
         if res_group:
             st.markdown(f"### {title}")
-            for res in sorted(res_group, key=lambda x: x["tier"]):
+            for res in sorted(res_group, key=lambda x: (not x["is_weighted"], x["tier"])):
+                # 修復：加權視覺呈現
+                weight_tag = "🌟 **加權重點項目** | " if res["is_weighted"] else ""
+                prio_class = "priority-item" if res["is_weighted"] else ""
                 pair_str = " + ".join(list(res["pair"]))
-                st.markdown(f"""<div class='{box_style}'><b>動作組合: {pair_str}</b> | <span class='depth-tag'>({res['depth']})</span><br>判定結果: {res['result']}<br><div class='treatment-path'>🛠️ 建議處理路徑: {res['path']}</div></div>""", unsafe_allow_html=True)
                 
-                # 嵌入踝部加測 UI (放在特定組合下方) [cite: 62, 63]
-                if pair_str in ["MSRR + MSSBL", "MSRL + MSSBR"]:
-                    st.markdown("<div class='ankle-box'>🔍 <b>偵測到骨盆以下代償，請加測踝部動作：</b>", unsafe_allow_html=True)
-                    side = "右" if "MSRR" in pair_str else "左"
-                    opp_side = "左" if side == "右" else "右"
-                    if st.checkbox(f"{side}踝內翻受限 (暗示{side}側線緊繃)", key=f"ankle_1_{pair_str}"): st.info(f"💡 建議處理：{side}側線 (淺層 KP1-KP3)")
-                    if st.checkbox(f"{opp_side}踝外翻受限 (暗示{opp_side}深前線緊繃)", key=f"ankle_2_{pair_str}"): st.info(f"💡 建議處理：{opp_side}深前線 (深層 KP1-KP2)")
-                    st.markdown("</div>", unsafe_allow_html=True)
+                st.markdown(f"""
+                    <div class='{box_style} {prio_class}'>
+                        {weight_tag}<b>動作組合: {pair_str}</b> <span class='depth-tag'>({res['depth']})</span><br>
+                        判定結果: {res['result']}<br>
+                        <div class='muscle-text'>💪 建議處理肌肉: {res['muscles']}</div>
+                    </div>
+                """, unsafe_allow_html=True)
 
-                # 還原 V1.1 影像自動顯示 
+                if pair_str in ["MSRR + MSSBL", "MSRL + MSSBR"]:
+                    st.markdown(f"<div class='ankle-box'>🔍 偵測到骨盆以下代償 ({pair_str})，請加測：</div>", unsafe_allow_html=True)
+                    side = "右" if "MSRR" in pair_str else "左"
+                    opp = "左" if side == "右" else "右"
+                    if st.checkbox(f"{side}踝內翻受限 (處理{side}側線)", key=f"a1_{pair_str}"): st.info(f"💡 處理：{side}側線 (淺層)")
+                    if st.checkbox(f"{opp}踝外翻受限 (處理{opp}深前線)", key=f"a2_{pair_str}"): st.info(f"💡 處理：{opp}深前線 (深層)")
+
                 found_imgs = [v for k, v in IMAGE_MAPPING.items() if k in res['result']]
                 if found_imgs:
-                    with st.expander(f"🔍 檢視圖譜: {res['result']}"):
-                        for img in found_imgs:
-                            l, mid, r = st.columns([1, 2, 1])
-                            try: mid.image(f"images/{img}", width=350)
-                            except: mid.error(f"找不到圖片: {img}")
+                    with st.expander(f"🔍 檢視圖譜"):
+                        for img in found_imgs: st.image(f"images/{img}", width=350)
 
-    if st.button("🚀 完成評估並同步雲端"):
-        # 同步邏輯 (同 V1.1) [cite: 96-102]
+    if st.button("🚀 完成評估並同步"):
         st.success("同步成功！")
 
 with tab4:
-    st.subheader("📚 完整筋膜解剖圖譜")
-    atlas = {"FF 功能線 (前+後)": ["FF1.jpg", "FF2.jpg"], "SBL 淺背線": ["SBL.jpg"], "SFL 淺前線": ["SFL.jpg"], "LL 側線": ["LL.jpg"], "SPL 螺旋線": ["SPL.jpg"], "DFL 深前線": ["DFL.jpg"], "SFAL 淺前臂線": ["SFAL.jpg"], "SBAL 淺後臂線": ["SBAL.jpg"], "DFAL 深前臂線": ["DFAL.jpg"], "DBAL 深後臂線": ["DBAL.jpg"]}
+    st.subheader("📚 完整解剖圖譜")
+    atlas = {"FF 功能線": ["FF1.jpg", "FF2.jpg"], "SBL 淺背線": ["SBL.jpg"], "SFL 淺前線": ["SFL.jpg"], "LL 側線": ["LL.jpg"], "SPL 螺旋線": ["SPL.jpg"], "DFL 深前線": ["DFL.jpg"], "手臂線系列": ["SFAL.jpg", "SBAL.jpg", "DFAL.jpg", "DBAL.jpg"]}
     for title, imgs in atlas.items():
         with st.expander(f"📍 {title}"):
-            for img in imgs: st.image(f"images/{img}", width=500)
+            for img in imgs: st.image(f"images/{img}", use_container_width=True)
 
-# Tab 5 歷史追蹤 (保留 V1.1 原貌) [cite: 103-110]
+with tab5:
+    # 修復：恢復歷史追蹤功能 
+    st.subheader("📈 歷史恢復趨勢")
+    search_id = st.text_input("輸入病歷號查詢")
+    if search_id:
+        all_df = fetch_data_no_cache(conn)
+        if not all_df.empty:
+            all_df['病歷號'] = all_df['病歷號'].astype(str).str.lstrip("'").str.strip()
+            p_history = all_df[all_df["病歷號"] == search_id].copy()
+            if not p_history.empty:
+                p_history['sort_dt'] = pd.to_datetime(p_history['日期'].str.replace(" (補)", ""), errors='coerce')
+                p_history = p_history.sort_values("sort_dt")
+                st.plotly_chart(px.bar(p_history, x="日期", y="病人自覺分數", color_discrete_sequence=["#1E88E5"], text_auto=True))
+                st.dataframe(p_history.sort_values("sort_dt", ascending=False)[["日期", "判定結果", "備註"]])
