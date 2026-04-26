@@ -19,7 +19,7 @@ def get_kpm_ai_advice(clinical_summary):
     KPM-AI 2026 正式版：使用已確認可用的 Gemini 2.0 模型。
     """
     # 根據您的 API 清單，使用確定的模型路徑
-    MODEL_NAME = 'models/gemini-2.0-flash'
+    MODEL_NAME ='models/gemini-2.0-flash-lite'
     
     system_prompt = """
     你是一位專業的 KPM 物理治療決策助手以及工作30年的物理治療師。
