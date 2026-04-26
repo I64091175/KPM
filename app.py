@@ -22,6 +22,10 @@ def get_kpm_ai_advice(clinical_summary, extra_info=""):
     
     system_prompt = """
     你是一位專業的 KPM 物理治療師。請根據提供的臨床摘要產出衛教內容。
+    【重要指令】：
+    1. 絕對禁止使用 #、*、-、> 等 Markdown 符號。
+    2. 使用「全形中文符號」如：【】、一、1.、：來排版。
+    3. 確保文字在手機記事本中閱讀流暢。
     
     【輸出規範】：
     1. 📋【整體評估總結】：
@@ -39,16 +43,14 @@ def get_kpm_ai_advice(clinical_summary, extra_info=""):
        - 結尾必含：以上建議僅供參考，請由專業物理治療師現場指導。
     """
     
-    combined_context = f"【評估數據】：{clinical_summary}\n【治療師特別囑咐】：{extra_info}"
+    combined_context = f"評估數據：{clinical_summary}\n備註：{extra_info}"
     
-    for model_name in [MODEL_NAME, 'models/gemini-flash-latest']:
-        try:
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(f"{system_prompt}\n\n{combined_context}")
-            return response.text if response else "AI 未回傳內容"
-        except:
-            continue
-    return "❌ 所有模型額度已滿，請稍後再試。"
+    try:
+        model = genai.GenerativeModel(MODEL_NAME)
+        response = model.generate_content(f"{system_prompt}\n\n{combined_context}")
+        return response.text if response else "AI 未回傳內容"
+    except Exception as e:
+        return f"❌ 呼叫失敗: {str(e)}"
 
 def fetch_data_with_buffer(conn):
     """
@@ -295,65 +297,66 @@ with tab5:
 
 with tab6:
     st.header("🤖 AI 臨床衛教助手")
-    
     ai_mode = st.radio("功能選擇", ["🔍 抓取最後一次評估結果", "✍️ 手動輸入狀況分析"])
     
-    # 額外補充資訊框 (共用項目)
     st.markdown("---")
-    extra_note = st.text_area(
-        "📝 治療師額外補充資訊 (選填)", 
-        placeholder="例如：病人希望能在家做的運動不要超過10分鐘、特別針對久坐族群...",
-        help="此資訊會與評估結果一併送給 AI 參考"
-    )
-
-    # 初始化建議容器
-    if 'generated_advice' not in st.session_state:
-        st.session_state.generated_advice = ""
+    extra_note = st.text_area("📝 治療師額外補充資訊", placeholder="例如：加強核心訓練、病人希望能在家做的運動不要超過10分鐘...")
 
     if ai_mode == "🔍 抓取最後一次評估結果":
         search_id = st.text_input("請輸入病歷號進行檢索", key="ai_search_id")
         
         if st.button("檢索並生成建議"):
-            if not search_id:
-                st.warning("請先輸入病歷號")
-            else:
-                with st.spinner("讀取雲端資料庫中..."):
-                    df_history = fetch_data_with_buffer(conn)
-                    if not df_history.empty:
-                        df_history.columns = df_history.columns.str.strip().str.replace('\n', '')
-                        col_pid = next((c for c in df_history.columns if "病歷號" in c), None)
-                        col_date = next((c for c in df_history.columns if "日期" in c), None)
+            with st.spinner("正在搜尋雲端最新資料..."):
+                df_history = fetch_data_with_buffer(conn)
+                if not df_history.empty:
+                    # 標題清洗
+                    df_history.columns = df_history.columns.str.strip().str.replace('\n', '')
+                    col_pid = next((c for c in df_history.columns if "病歷號" in c), None)
+                    col_date = next((c for c in df_history.columns if "日期" in c), None)
+                    col_ai_record = next((c for c in df_history.columns if "AI衛教建議" in c), None)
+                    
+                    if col_pid:
+                        df_history["pid_clean"] = df_history[col_pid].astype(str).str.lstrip("'").str.strip()
+                        p_data = df_history[df_history["pid_clean"] == str(search_id).strip()].copy()
                         
-                        if col_pid:
-                            df_history["pid_clean"] = df_history[col_pid].astype(str).str.lstrip("'").str.strip()
-                            p_data = df_history[df_history["pid_clean"] == str(search_id).strip()].copy()
+                        if not p_data.empty:
+                            p_data[col_date] = pd.to_datetime(p_data[col_date], errors='coerce')
+                            latest_record = p_data.sort_values(by=col_date, ascending=False).iloc[0]
                             
-                            if not p_data.empty:
-                                p_data[col_date] = pd.to_datetime(p_data[col_date], errors='coerce')
-                                latest_record = p_data.sort_values(by=col_date, ascending=False).iloc[0]
-                                
-                                clinical_context = f"判定: {latest_record.get('判定結果', '無')}, 肌肉: {latest_record.get('建議處理肌肉', '無')}, 備註: {latest_record.get('備註總結', '無')}"
-                                st.session_state.generated_advice = get_kpm_ai_advice(clinical_context, extra_note)
-                                st.success("✅ 建議已生成")
+                            # Q3 邏輯：檢查資料庫是否已有 AI 建議
+                            existing_advice = latest_record.get(col_ai_record, "") if col_ai_record else ""
+                            
+                            if existing_advice and len(str(existing_advice)) > 50:
+                                st.session_state.generated_advice = existing_advice
+                                st.info("💡 已從雲端資料庫讀取現有衛教資訊（節省流量）。")
                             else:
-                                st.error("找不到該病歷號")
+                                # 提取建議肌肉 (Q2 重要性)
+                                muscle_info = latest_record.get('建議處理肌肉', '無資料')
+                                clinical_context = f"判定: {latest_record.get('判定結果', '無')}, 肌肉: {muscle_info}"
+                                st.session_state.generated_advice = get_kpm_ai_advice(clinical_context, extra_note)
+                                st.warning("🆕 雲端無舊紀錄，已產生新 AI 衛教。")
+                            
+                            st.success("✅ 處理完成")
+                        else:
+                            st.error("找不到該病歷號")
 
     else: # 手動輸入模式
-        manual_context = st.text_area("請輸入臨床描述 (如：左側側線受限，外展肌力弱)")
+        manual_context = st.text_area("請輸入臨床描述")
         if st.button("生成分析建議"):
             st.session_state.generated_advice = get_kpm_ai_advice(manual_context, extra_note)
 
-    # 顯示結果與複製按鈕
-    if st.session_state.generated_advice:
+    # 顯示結果與優化複製
+    if 'generated_advice' in st.session_state and st.session_state.generated_advice:
         st.markdown("---")
         st.subheader("📋 KPM AI 運動建議")
-        st.markdown(st.session_state.generated_advice)
         
-        # 一鍵複製按鈕 (Streamlit 1.37.0+ 支援)
-        if st.button("📋 點我複製衛教資訊"):
-            # 在手機端，st.code 的複製功能通常比 clipboard 更穩定
-            st.toast("已為您準備好複製內容，請使用下方框框內的複製圖示")
-            st.code(st.session_state.generated_advice, language="markdown")
+        # Q1 效果：顯示與複製框
+        st.info("以下內容可直接複製")
+        st.code(st.session_state.generated_advice, language="text")
+        
+        # 額外提供一個「存回雲端」按鈕 (選填)
+        if st.button("💾 將此建議同步至雲端資料庫"):
+            st.toast("此功能需要配合 GSheets Update 權限，目前建議先手動複製。")
 
 # 時區顯示 (依據 SOP 要求)
 st.caption(f"系統時間：{datetime.now(tz_taiwan).strftime('%Y-%m-%d %H:%M:%S')} (Taipei)")
