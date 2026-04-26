@@ -304,52 +304,50 @@ with tab6:
                 st.warning("請先輸入病歷號")
             else:
                 with st.spinner("正在搜尋雲端最新資料..."):
-                    # 1. 抓取資料 (確保使用 V1.2 定義的函式)
                     df_history = fetch_data_no_cache(conn)
                     
                     if not df_history.empty:
-                        # --- 【核心修復：極致清洗資料】 ---
-                        # 標題去空格
+                        # 1. 標題清洗
                         df_history.columns = df_history.columns.str.strip()
                         
-                        # 移除整列都是空的資料（Google Sheets 常有的問題）
-                        df_history = df_history.dropna(how='all')
-                        
                         if "病歷號" in df_history.columns:
-                            # 清洗病歷號：轉字串、去空格、移除可能存在的 .0 (若是數字轉字串常發生)
-                            df_history["病歷號_clean"] = df_history["病歷號"].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+                            # --- 【核心修正：移除單引號與格式校準】 ---
+                            # 強制轉字串 -> 移除開頭的單引號 -> 移除結尾的 .0 -> 去除前後空白
+                            df_history["病歷號_clean"] = (
+                                df_history["病歷號"]
+                                .astype(str)
+                                .str.lstrip("'")
+                                .str.replace(r'\.0$', '', regex=True)
+                                .str.strip()
+                            )
                             
-                            # 清洗輸入值
+                            # 使用者輸入值也做同樣處理
                             target_id = str(search_id).strip().replace('.0', '')
                             
-                            # 進行比對
                             p_data = df_history[df_history["病歷號_clean"] == target_id]
                             
                             if not p_data.empty:
-                                # 依據評估日期排序 (確保日期格式正確再排序)
+                                # 依據評估日期排序 (確保抓到的是最新一次)
                                 p_data["評估日期"] = pd.to_datetime(p_data["評估日期"], errors='coerce')
                                 latest_record = p_data.sort_values(by="評估日期", ascending=False).iloc[0]
                                 
-                                # 去識別化提取
+                                # 【去識別化】僅傳送判定與肌肉給 AI
                                 clinical_context = f"""
-                                筋膜判定結果: {latest_record.get('判定結果', '無')}
-                                建議處理肌肉: {latest_record.get('建議處理肌肉', '無')}
-                                備註總結: {latest_record.get('備註總結', '無')}
+                                判定結果: {latest_record.get('判定結果', '無資料')}
+                                建議處理肌肉: {latest_record.get('建議處理肌肉', '無資料')}
+                                備註總結: {latest_record.get('備註總結', '無資料')}
                                 """
                                 
                                 advice = get_kpm_ai_advice(clinical_context)
-                                st.success(f"✅ 找到病歷號 {target_id} 的最新紀錄")
+                                st.success(f"✅ 成功對接！已抓取病歷號 {target_id} 的最新紀錄")
                                 st.markdown("---")
                                 st.subheader("📋 KPM AI 衛教建議")
                                 st.markdown(advice)
                             else:
-                                # 【除錯輔助：若還是找不到，列出目前資料庫有的前 5 個病歷號】
-                                st.error(f"❌ 找不到病歷號 『{target_id}』。")
-                                with st.expander("🔍 點此檢查資料庫比對狀態"):
-                                    st.write("目前資料庫清洗後的病歷號清單：")
-                                    st.code(df_history["病歷號_clean"].unique().tolist()[:10])
+                                st.error(f"❌ 依然找不到病歷號 『{target_id}』。")
+                                st.info("建議：請檢查 Tab 5 列表中的病歷號是否包含英文字母或特殊符號。")
                         else:
-                            st.error("❌ 找不到『病歷號』欄位，請檢查試算表標題。")
+                            st.error("❌ 找不到『病歷號』欄位。")
                     else:
                         st.error("❌ 資料庫目前為空。")
 
