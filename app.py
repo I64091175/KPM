@@ -296,58 +296,66 @@ with tab6:
     ai_func = st.radio("請選擇 AI 功能", ["抓取最後一次評估結果", "手動輸入狀況分析"])
 
     # --- 功能一：自動抓取 ---
-    if ai_func == "抓取最後一次評估結果":
+if ai_func == "抓取最後一次評估結果":
         search_id = st.text_input("請輸入病歷號進行檢索", key="ai_search_id")
         
         if st.button("檢索並生成建議"):
             if not search_id:
                 st.warning("請先輸入病歷號")
             else:
-                with st.spinner("正在搜尋雲端最新資料..."):
+                with st.spinner("正在讀取雲端資料庫..."):
                     df_history = fetch_data_no_cache(conn)
                     
                     if not df_history.empty:
-                        # 1. 標題清洗
-                        df_history.columns = df_history.columns.str.strip()
+                        # --- 【核心修正：標題強健化】 ---
+                        # 1. 移除所有欄位名稱的前後空白，並統一處理換行符
+                        df_history.columns = df_history.columns.str.strip().str.replace('\n', '')
                         
-                        if "病歷號" in df_history.columns:
-                            # --- 【核心修正：移除單引號與格式校準】 ---
-                            # 強制轉字串 -> 移除開頭的單引號 -> 移除結尾的 .0 -> 去除前後空白
-                            df_history["病歷號_clean"] = (
-                                df_history["病歷號"]
+                        # 2. 自動識別正確的欄位名稱 (防止因名稱微調導致 KeyError)
+                        col_pid = next((c for c in df_history.columns if "病歷號" in c), None)
+                        col_date = next((c for c in df_history.columns if "日期" in c), None)
+                        col_result = next((c for c in df_history.columns if "判定結果" in c), "判定結果")
+                        col_muscle = next((c for c in df_history.columns if "肌肉" in c), "建議處理肌肉")
+                        col_note = next((c for c in df_history.columns if "備註" in c), "備註總結")
+
+                        if col_pid and col_date:
+                            # 3. 清洗資料庫中的病歷號 (移除單引號、.0 與空格)
+                            df_history["pid_clean"] = (
+                                df_history[col_pid]
                                 .astype(str)
                                 .str.lstrip("'")
                                 .str.replace(r'\.0$', '', regex=True)
                                 .str.strip()
                             )
                             
-                            # 使用者輸入值也做同樣處理
                             target_id = str(search_id).strip().replace('.0', '')
-                            
-                            p_data = df_history[df_history["病歷號_clean"] == target_id]
+                            p_data = df_history[df_history["pid_clean"] == target_id].copy()
                             
                             if not p_data.empty:
-                                # 依據評估日期排序 (確保抓到的是最新一次)
-                                p_data["評估日期"] = pd.to_datetime(p_data["評估日期"], errors='coerce')
-                                latest_record = p_data.sort_values(by="評估日期", ascending=False).iloc[0]
+                                # 4. 排序：使用自動識別出的日期欄位
+                                p_data[col_date] = pd.to_datetime(p_data[col_date], errors='coerce')
+                                latest_record = p_data.sort_values(by=col_date, ascending=False).iloc[0]
                                 
-                                # 【去識別化】僅傳送判定與肌肉給 AI
+                                # 5. 提取去識別化資訊
                                 clinical_context = f"""
-                                判定結果: {latest_record.get('判定結果', '無資料')}
-                                建議處理肌肉: {latest_record.get('建議處理肌肉', '無資料')}
-                                備註總結: {latest_record.get('備註總結', '無資料')}
+                                判定結果: {latest_record.get(col_result, '無資料')}
+                                建議處理肌肉: {latest_record.get(col_muscle, '無資料')}
+                                備註分析: {latest_record.get(col_note, '無資料')}
                                 """
                                 
                                 advice = get_kpm_ai_advice(clinical_context)
-                                st.success(f"✅ 成功對接！已抓取病歷號 {target_id} 的最新紀錄")
+                                st.success(f"✅ 對接成功！已找到病歷號 {target_id} 的最新紀錄")
                                 st.markdown("---")
                                 st.subheader("📋 KPM AI 衛教建議")
                                 st.markdown(advice)
                             else:
-                                st.error(f"❌ 依然找不到病歷號 『{target_id}』。")
-                                st.info("建議：請檢查 Tab 5 列表中的病歷號是否包含英文字母或特殊符號。")
+                                st.error(f"❌ 找不到病歷號 『{target_id}』")
+                                with st.expander("🔍 檢查資料庫格式 (Debug)"):
+                                    st.write("目前識別到的日期欄位：", col_date)
+                                    st.write("目前識別到的病歷號欄位：", col_pid)
+                                    st.write("現有的病歷號清單：", df_history["pid_clean"].unique().tolist()[:5])
                         else:
-                            st.error("❌ 找不到『病歷號』欄位。")
+                            st.error(f"❌ 標題對接失敗。請確認試算表包含『病歷號』與『評估日期』。目前標題：{list(df_history.columns)}")
                     else:
                         st.error("❌ 資料庫目前為空。")
 
