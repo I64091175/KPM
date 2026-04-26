@@ -296,7 +296,7 @@ with tab6:
     ai_func = st.radio("請選擇 AI 功能", ["抓取最後一次評估結果", "手動輸入狀況分析"])
 
     # --- 功能一：自動抓取 ---
-if ai_func == "抓取最後一次評估結果":
+    if ai_func == "抓取最後一次評估結果":
         search_id = st.text_input("請輸入病歷號進行檢索", key="ai_search_id")
         
         if st.button("檢索並生成建議"):
