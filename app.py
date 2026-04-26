@@ -14,53 +14,41 @@ else:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 
 # --- AI 核心函式 ---
-def get_kpm_ai_advice(clinical_summary):
+def get_kpm_ai_advice(clinical_summary, extra_info=""):
     """
-    KPM-AI 輪詢備援版：自動嘗試多個 2026 可用模型，繞過單一模型額度限制。
-    KPM-AI 臨床優化版：針對病人產出易懂總結與居家運動處方。
+    KPM-AI 臨床優化版：針對病人產出易懂總結與具體居家運動處方。
     """
-    # 根據你的清單，排定嘗試優先順序
-    # 避開回報 limit 0 的 lite 版本
-    priority_models = [
-        'models/gemini-2.0-flash',      # 優先嘗試 2.0 正式版
-        'models/gemini-flash-latest',   # 備援 1
-        'models/gemini-1.5-flash',      # 備援 2 (若仍存在)
-        'models/gemini-pro-latest'      # 最後備援
-    ]
+    MODEL_NAME = 'models/gemini-2.0-flash'
     
     system_prompt = """
-    你是一位專業的 KPM 物理治療師。請根據臨床摘要產出衛教內容。
+    你是一位專業的 KPM 物理治療師。請根據提供的臨床摘要產出衛教內容。
     
     【輸出規範】：
     1. 📋【整體評估總結】：
-       - 請以「病人聽得懂」的白話文解釋目前的身體狀況。
-       - 明確告知接下來的居家運動為何對他有幫助（例如：透過調整筋膜張力，改善動作時的受限與不適）。
+       - 請用「病人聽得懂」的白話文解釋目前的身體受限狀況。
+       - 明確告訴病人：為什麼接下來的運動對他有幫助（例如：調整筋膜張力、釋放關鍵點壓力）。
     
     2. 🧘【居家運動處方】：
-       - 針對受限的筋膜線（若有 ⭐ 加權項目請優先處理），提供具體的居家運動指導。
-       - **必須包含：動作名稱、動作執行細節描述、次數（例如：每組10下，每天3組）。**
+       - 針對受限筋膜線（若有 ⭐ 加權項目請優先處理），提供具體的居家運動指導。
+       - **必須包含：動作名稱、執行步驟、運動頻率與次數（例如：每組12下，每天3組）。**
     
     3. ⚠️【日常動作禁忌】：
-       - 列出該病人在日常生活中應避免的特定姿勢或動作。
+       - 列出該病人在日常生活中（如久坐、搬物）應避免的特定姿勢。
     
     4. 📜【醫囑警語】：
        - 結尾必含：以上建議僅供參考，請由專業物理治療師現場指導。
     """
     
-    for model_name in priority_models:
+    combined_context = f"【評估數據】：{clinical_summary}\n【治療師特別囑咐】：{extra_info}"
+    
+    for model_name in [MODEL_NAME, 'models/gemini-flash-latest']:
         try:
             model = genai.GenerativeModel(model_name)
-            response = model.generate_content(f"{system_prompt}\n\n資料：{clinical_summary}")
-            if response and response.text:
-                return f"✅ (由 {model_name.split('/')[-1]} 生成)\n\n" + response.text
-        except Exception as e:
-            # 檢查是否為 429 錯誤，是的話繼續嘗試下一個模型
-            if "429" in str(e):
-                continue
-            else:
-                return f"❌ AI 呼叫失敗: {str(e)}"
-                
-    return "😴 所有免費模型額度暫時用盡。請靜候一分鐘，或明天再試。您目前的資料已安全存儲在 Tab 5。"
+            response = model.generate_content(f"{system_prompt}\n\n{combined_context}")
+            return response.text if response else "AI 未回傳內容"
+        except:
+            continue
+    return "❌ 所有模型額度已滿，請稍後再試。"
 
 def fetch_data_with_buffer(conn):
     """
@@ -148,12 +136,12 @@ def display_ui_common(res_list, title):
 # --- 3. 介面分頁 ---
 
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "📋 病人基本資料", 
-    "🦴 主動評估快篩", 
-    "📊 判定結果與建議", 
-    "📚 完整解剖圖譜", 
-    "📈 歷史趨勢追蹤",
-    "🤖 AI 臨床助手"
+    "📋 基本資料", 
+    "🦴 主動快篩", 
+    "📊 判定結果", 
+    "📚 完整圖譜", 
+    "📈 趨勢追蹤",
+    "🤖 AI 助手"
 ])
 
 with tab1:
@@ -306,93 +294,66 @@ with tab5:
         else: st.warning("資料庫目前為空。")
 
 with tab6:
-    st.header("🤖 AI 臨床決策助手")
-    st.info("本功能透過 Google Gemini 提供臨床衛教建議，所有資料已進行去識別化處理。")
+    st.header("🤖 AI 臨床衛教助手")
+    
+    ai_mode = st.radio("功能選擇", ["🔍 抓取最後一次評估結果", "✍️ 手動輸入狀況分析"])
+    
+    # 額外補充資訊框 (共用項目)
+    st.markdown("---")
+    extra_note = st.text_area(
+        "📝 治療師額外補充資訊 (選填)", 
+        placeholder="例如：病人希望能在家做的運動不要超過10分鐘、特別針對久坐族群...",
+        help="此資訊會與評估結果一併送給 AI 參考"
+    )
 
-    ai_func = st.radio("請選擇 AI 功能", ["抓取最後一次評估結果", "手動輸入狀況分析"])
+    # 初始化建議容器
+    if 'generated_advice' not in st.session_state:
+        st.session_state.generated_advice = ""
 
-    # --- 功能一：自動抓取 ---
-    if ai_func == "抓取最後一次評估結果":
+    if ai_mode == "🔍 抓取最後一次評估結果":
         search_id = st.text_input("請輸入病歷號進行檢索", key="ai_search_id")
         
         if st.button("檢索並生成建議"):
             if not search_id:
                 st.warning("請先輸入病歷號")
             else:
-                with st.spinner("正在讀取雲端資料庫..."):
-                    df_history = fetch_data_no_cache(conn)
-                    
+                with st.spinner("讀取雲端資料庫中..."):
+                    df_history = fetch_data_with_buffer(conn)
                     if not df_history.empty:
-                        # --- 【核心修正：標題強健化】 ---
-                        # 1. 移除所有欄位名稱的前後空白，並統一處理換行符
                         df_history.columns = df_history.columns.str.strip().str.replace('\n', '')
-                        
-                        # 2. 自動識別正確的欄位名稱 (防止因名稱微調導致 KeyError)
                         col_pid = next((c for c in df_history.columns if "病歷號" in c), None)
                         col_date = next((c for c in df_history.columns if "日期" in c), None)
-                        col_result = next((c for c in df_history.columns if "判定結果" in c), "判定結果")
-                        col_muscle = next((c for c in df_history.columns if "肌肉" in c), "建議處理肌肉")
-                        col_note = next((c for c in df_history.columns if "備註" in c), "備註總結")
-
-                        if col_pid and col_date:
-                            # 3. 清洗資料庫中的病歷號 (移除單引號、.0 與空格)
-                            df_history["pid_clean"] = (
-                                df_history[col_pid]
-                                .astype(str)
-                                .str.lstrip("'")
-                                .str.replace(r'\.0$', '', regex=True)
-                                .str.strip()
-                            )
-                            
-                            target_id = str(search_id).strip().replace('.0', '')
-                            p_data = df_history[df_history["pid_clean"] == target_id].copy()
+                        
+                        if col_pid:
+                            df_history["pid_clean"] = df_history[col_pid].astype(str).str.lstrip("'").str.strip()
+                            p_data = df_history[df_history["pid_clean"] == str(search_id).strip()].copy()
                             
                             if not p_data.empty:
-                                # 4. 排序：使用自動識別出的日期欄位
                                 p_data[col_date] = pd.to_datetime(p_data[col_date], errors='coerce')
                                 latest_record = p_data.sort_values(by=col_date, ascending=False).iloc[0]
                                 
-                                # 5. 提取去識別化資訊
-                                clinical_context = f"""
-                                判定結果: {latest_record.get(col_result, '無資料')}
-                                建議處理肌肉: {latest_record.get(col_muscle, '無資料')}
-                                備註分析: {latest_record.get(col_note, '無資料')}
-                                """
-                                
-                                advice = get_kpm_ai_advice(clinical_context)
-                                st.success(f"✅ 對接成功！已找到病歷號 {target_id} 的最新紀錄")
-                                st.markdown("---")
-                                st.subheader("📋 KPM AI 衛教建議")
-                                st.markdown(advice)
+                                clinical_context = f"判定: {latest_record.get('判定結果', '無')}, 肌肉: {latest_record.get('建議處理肌肉', '無')}, 備註: {latest_record.get('備註總結', '無')}"
+                                st.session_state.generated_advice = get_kpm_ai_advice(clinical_context, extra_note)
+                                st.success("✅ 建議已生成")
                             else:
-                                st.error(f"❌ 找不到病歷號 『{target_id}』")
-                                with st.expander("🔍 檢查資料庫格式 (Debug)"):
-                                    st.write("目前識別到的日期欄位：", col_date)
-                                    st.write("目前識別到的病歷號欄位：", col_pid)
-                                    st.write("現有的病歷號清單：", df_history["pid_clean"].unique().tolist()[:5])
-                        else:
-                            st.error(f"❌ 標題對接失敗。請確認試算表包含『病歷號』與『評估日期』。目前標題：{list(df_history.columns)}")
-                    else:
-                        st.error("❌ 資料庫目前為空。")
+                                st.error("找不到該病歷號")
 
-    # --- 功能二：手動輸入 ---
-    else:
-        st.subheader("✍️ 手動描述病人狀況")
-        manual_context = st.text_area(
-            "請描述病人狀況（例如：右腰疼痛，久坐加重，MSF 呈現 DA，判定為 SBL 受限）",
-            placeholder="請勿輸入病人姓名、電話或身分證字號",
-            height=150
-        )
-        
+    else: # 手動輸入模式
+        manual_context = st.text_area("請輸入臨床描述 (如：左側側線受限，外展肌力弱)")
         if st.button("生成分析建議"):
-            if len(manual_context) < 5:
-                st.warning("請輸入更詳細的臨床狀況。")
-            else:
-                with st.spinner("AI 分析中..."):
-                    advice = get_kpm_ai_advice(manual_context)
-                    st.markdown("---")
-                    st.subheader("📋 KPM AI 衛教建議")
-                    st.markdown(advice)
+            st.session_state.generated_advice = get_kpm_ai_advice(manual_context, extra_note)
 
-    # 時區顯示 (依據 SOP 要求)
-    st.caption(f"系統時間：{datetime.now(tz_taiwan).strftime('%Y-%m-%d %H:%M:%S')} (Taipei)")
+    # 顯示結果與複製按鈕
+    if st.session_state.generated_advice:
+        st.markdown("---")
+        st.subheader("📋 KPM AI 運動建議")
+        st.markdown(st.session_state.generated_advice)
+        
+        # 一鍵複製按鈕 (Streamlit 1.37.0+ 支援)
+        if st.button("📋 點我複製衛教資訊"):
+            # 在手機端，st.code 的複製功能通常比 clipboard 更穩定
+            st.toast("已為您準備好複製內容，請使用下方框框內的複製圖示")
+            st.code(st.session_state.generated_advice, language="markdown")
+
+# 時區顯示 (依據 SOP 要求)
+st.caption(f"系統時間：{datetime.now(tz_taiwan).strftime('%Y-%m-%d %H:%M:%S')} (Taipei)")
