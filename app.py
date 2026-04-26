@@ -67,7 +67,7 @@ def fetch_data_with_buffer(conn):
         return pd.DataFrame()
 
 # 1. 基礎設定
-st.set_page_config(page_title="KPM 筋膜評估系統 V1.3.20", layout="centered")
+st.set_page_config(page_title="KPM 筋膜評估系統 V1.3.21", layout="centered")
 tz_taiwan = timezone(timedelta(hours=8))
 
 def fetch_data_no_cache(_conn):
@@ -92,7 +92,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🩺 KPM 關鍵點評估系統 V1.3.20")
+st.title("🩺 KPM 關鍵點評估系統 V1.3.21")
 
 # --- 2. 核心資料定義 --- [cite: 50-67, 81-83]
 ACTIONS = ["CF", "CE", "CRR", "CRL", "CR", "RAU", "RAD", "LAU", "LAD", "MSF", "MSE", "MSRR", "MSRL", "MSSBR", "MSSBL", "CADS"]
@@ -195,14 +195,22 @@ with tab3:
     # 提取所有 matched rule 裡的 muscle，並轉為去重複的清單
     suggested_muscles = []
     for item in all_matched_items:
-        # 這裡改用您確認過的 'muscles' 鍵值
-        m_list = item.get("muscles")
-        if m_list and isinstance(m_list, list):
-            suggested_muscles.extend(m_list)
+        m_val = item.get("muscles")
+        if m_val:
+            if isinstance(m_val, list):
+                # 如果未來你改成 list 格式，這行能處理
+                suggested_muscles.extend(m_val)
+            else:
+                # 處理目前的字串格式 (如: "左頭頰、右菱形")
+                # 先依據「、」或「,」拆分，確保去重複效果精準
+                parts = str(m_val).replace('、', ',').split(',')
+                suggested_muscles.extend([p.strip() for p in parts])
     
     # 去重複並用逗號隔開
-    unique_muscles_str = ", ".join(sorted(list(set(suggested_muscles)))) if suggested_muscles else "無資料"
-
+    if suggested_muscles:
+        unique_muscles_str = "、".join(sorted(list(set(suggested_muscles))))
+    else:
+        unique_muscles_str = "無資料"
     # 動態紀錄加測結果
     selected_ankle_options = []
     all_pairs = [" + ".join(sorted(list(r["pair"]))) for r in all_matched_items]
