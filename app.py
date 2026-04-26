@@ -67,7 +67,7 @@ def fetch_data_with_buffer(conn):
         return pd.DataFrame()
 
 # 1. 基礎設定
-st.set_page_config(page_title="KPM 筋膜評估系統 V1.3", layout="centered")
+st.set_page_config(page_title="KPM 筋膜評估系統 V1.3.19", layout="centered")
 tz_taiwan = timezone(timedelta(hours=8))
 
 def fetch_data_no_cache(_conn):
@@ -147,7 +147,7 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
 ])
 
 with tab1:
-    st.subheader("👤 病人基本資料")
+    st.subheader("👤 基本資料")
     p_name = st.text_input("病人姓名", key="p_name")
     p_id = st.text_input("病歷號", key="p_id")
     p_date = st.date_input("評估日期", value=datetime.now(tz_taiwan).date())
@@ -190,9 +190,20 @@ with tab3:
     display_ui_common(da_da_res, "🟦 DA-DA 對應結果")
     display_ui_common(ds_ds_res, "🟧 DS-DS 對應結果")
 
+    # --- 【新增邏輯：彙整建議處理肌肉字串】 ---
+    all_matched_items = weighted_res + da_da_res + ds_ds_res
+    # 提取所有 matched rule 裡的 muscle，並轉為去重複的清單
+    suggested_muscles = []
+    for item in all_matched_items:
+        if "muscle" in item:
+            suggested_muscles.extend(item["muscle"])
+    
+    # 去重複並用逗號隔開
+    unique_muscles_str = ", ".join(sorted(list(set(suggested_muscles)))) if suggested_muscles else "無資料"
+
     # 動態紀錄加測結果
     selected_ankle_options = []
-    all_pairs = [" + ".join(sorted(list(r["pair"]))) for r in weighted_res + da_da_res + ds_ds_res]
+    all_pairs = [" + ".join(sorted(list(r["pair"]))) for r in all_matched_items]
     for p_str in ["MSRR + MSSBL", "MSRL + MSSBR"]:
         if p_str in all_pairs:
             st.markdown(f"<div class='ankle-box'>🔍 偵測到 {p_str} 相對應，請加測：</div>", unsafe_allow_html=True)
@@ -222,31 +233,49 @@ with tab3:
                 prio_tags = [f"{a}(⭐)" for a in priority_list]
                 combined_details = "/".join(act_notes + prio_tags)
                 final_note = f"{p_note} | 詳細: {combined_details}" if p_note and combined_details else (p_note or combined_details)
+                
                 now_tw = datetime.now(tz_taiwan)
                 final_dt_str = now_tw.strftime("%Y-%m-%d %H:%M") if p_date >= now_tw.date() else f"{p_date} (補)"
                 
+                # --- 【核心修正：將肌肉與衛教欄位加入 record 字典】 ---
                 record = {
-                    "日期": final_dt_str, "評估人": p_assessor, "病人姓名": p_name, "病歷號": f"'{p_id}",
-                    "病人自覺分數": vas_score, "加權關鍵點": ", ".join(priority_list),
-                    "判定結果": " / ".join([res['result'] for res in weighted_res + da_da_res + ds_ds_res]), 
-                    "備註": final_note, "加測建議": ankle_final_str # 紀錄具體選項
+                    "日期": final_dt_str, 
+                    "評估人": p_assessor, 
+                    "病人姓名": p_name, 
+                    "病歷號": f"'{p_id}",
+                    "病人自覺分數": vas_score, 
+                    "加權關鍵點": ", ".join(priority_list),
+                    "判定結果": " / ".join([res['result'] for res in all_matched_items]), 
+                    "建議處理肌肉": unique_muscles_str, # <--- 修正點 1
+                    "備註": final_note, 
+                    "加測建議": ankle_final_str,
+                    "AI衛教建議": ""                  # <--- 修正點 2 (預留位置)
                 }
+                
+                # 更新動作分數
                 record.update(user_scores)
+                
+                # 抓取雲端資料並合併
                 df_old = fetch_data_no_cache(conn)
                 df_final = pd.concat([df_old, pd.DataFrame([record])], ignore_index=True)
+                
+                # 同步回 Google Sheets
                 conn.update(worksheet="Sheet1", data=df_final)
-                st.success(f"✅ 資料已同步！時間：{final_dt_str}"); st.balloons()
-            except Exception as e: st.error(f"同步失敗: {e}")
+                
+                st.success(f"✅ 資料已同步！時間：{final_dt_str}")
+                st.balloons()
+            except Exception as e:
+                st.error(f"同步失敗: {e}")
 
 with tab4:
-    st.subheader("📚 完整解剖圖譜")
+    st.subheader("📚 完整圖譜")
     atlas = {"FF 功能線": ["FF1.jpg", "FF2.jpg"], "SBL 淺背線": ["SBL.jpg"], "SFL 淺前線": ["SFL.jpg"], "LL 側線": ["LL.jpg"], "SPL 螺旋線": ["SPL.jpg"], "DFL 深前線": ["DFL.jpg"], "手臂線系列": ["SFAL.jpg", "SBAL.jpg", "DFAL.jpg", "DBAL.jpg"]}
     for title, imgs in atlas.items():
         with st.expander(f"📍 {title}"):
             for img in imgs: st.image(f"images/{img}", use_container_width=True)
 
 with tab5:
-    st.subheader("📈 歷史評估狀態導覽")
+    st.subheader("📈 趨勢追蹤")
     search_id = st.text_input("🔍 輸入病歷號查詢歷史紀錄", key="q_id_v12_final")
     
     if search_id:
