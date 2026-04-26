@@ -8,10 +8,10 @@ import google.generativeai as genai  # 新增 Gemini 支援
 
 # --- AI 設定 (依據 SOP: 建議存放在 secrets.toml) ---
 if "GOOGLE_API_KEY" in st.secrets:
-    genai.configure(api_key=st.secrets["AIzaSyDoO3lBTJAsrUch5kBR0T7Vb_OXPbBye8A"])
+    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 else:
     # 若本地測試尚未設定 secrets，請在此填入 API Key
-    genai.configure(api_key="AIzaSyDoO3lBTJAsrUch5kBR0T7Vb_OXPbBye8A")
+    genai.configure(api_key="AIzaSyCebe00iGEcFBrAOP3wpYhhXNEUAwY76Ok")
 
 # --- AI 核心函式 ---
 def get_kpm_ai_advice(clinical_summary):
@@ -48,7 +48,7 @@ def get_kpm_ai_advice(clinical_summary):
 # ==========================================
 
 # 1. 基礎設定
-st.set_page_config(page_title="KPM 筋膜評估系統 V1.2", layout="centered")
+st.set_page_config(page_title="KPM 筋膜評估系統 V1.3", layout="centered")
 tz_taiwan = timezone(timedelta(hours=8))
 
 def fetch_data_no_cache(_conn):
