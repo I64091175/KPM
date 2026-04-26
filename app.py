@@ -15,33 +15,29 @@ else:
 
 # --- AI 核心函式 ---
 def get_kpm_ai_advice(clinical_summary):
-  
-    model = genai.GenerativeModel(model_name='gemini-1.5-flash')
+    """
+    呼叫 Gemini 提供衛教建議。
+    """
+    # 修正重點：確保模型名稱字串精確
+    model = genai.GenerativeModel('gemini-1.5-flash') 
     
     system_prompt = """
-    你是一位專業的 KPM 物理治療決策助手以及工作30年經驗的物理治療師。
-    你的任務是根據「關鍵點療法 (KPM)」與「解剖列車 (Anatomy Trains)」的邏輯提供建議。
-    
-    【輸出規範】：
-    1. 口吻：溫和、鼓勵、專業。
-    2. 重點：針對受限的筋膜線提供「居家調整原則」與「日常禁忌」。
-    3. 專業性：若資料中有加權項目(⭐)，請優先針對該部位解釋。
-    4. 警語：結尾必須包含「以上建議僅供參考，請由專業物理治療師現場指導」。
+    你是一位專業的 KPM 物理治療決策助手。
+    請根據關鍵點療法 (KPM) 邏輯提供衛教。
+    1. 口吻專業且溫和。
+    2. 優先針對加權項目 (⭐) 進行居家調整建議。
+    3. 警語：結尾需註明「以上僅供參考，請諮詢專業物理治療師」。
     """
     
-    full_prompt = f"{system_prompt}\n\n【病人臨床摘要】：\n{clinical_summary}"
-    
     try:
-        response = model.generate_content(full_prompt)
-        
+        # 使用更穩定的呼叫方式
+        response = model.generate_content(
+            f"{system_prompt}\n\n【去識別化臨床摘要】：\n{clinical_summary}"
+        )
         return response.text
     except Exception as e:
-        try:
-            fallback_model = genai.GenerativeModel('gemini-1.0-pro')
-            response = fallback_model.generate_content(full_prompt)
-            return "⚠️ (使用備用模型生成)\n" + response.text
-        except:
-            return f"❌ AI 呼叫失敗: {str(e)}"
+        # 若發生錯誤，回傳具體原因供 debug
+        return f"❌ AI 呼叫失敗，請檢查網路或金鑰狀態。錯誤訊息: {str(e)}"
         
 
 # ==========================================
