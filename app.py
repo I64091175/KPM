@@ -28,7 +28,7 @@ def get_kpm_ai_advice(clinical_summary):
     ]
     
     system_prompt = """
-    你是一位專業的 KPM 物理治療決策助手以及工作30年的物理治療師。
+    你是一位專業的 KPM 物理治療決策助手。
     請根據臨床摘要提供去識別化的衛教建議。
     邏輯需嚴格符合「解剖列車 (Anatomy Trains)」與「關鍵點療法 (KPM)」。
     
@@ -307,34 +307,43 @@ with tab6:
                     # 從 GSheets 讀取資料 (延續 V1.2 的 conn 邏輯)
                     df_history = fetch_data_no_cache(conn)
                     
-                    if not df_history.empty and "病歷號" in df_history.columns:
-                        # 篩選該病歷號，並依照評估日期排序 (取最新)
-                        p_data = df_history[df_history["病歷號"] == search_id]
+                    if not df_history.empty:
+                        # --- 【核心修正：格式對齊】 ---
+                        # 1. 確保『病歷號』欄位存在 (處理欄位名稱可能有空格的問題)
+                        df_history.columns = [c.strip() for c in df_history.columns]
                         
-                        if not p_data.empty:
-                            # 依據 SOP Rule 1: 抓取最新一筆
-                            latest_record = p_data.sort_values(by="評估日期", ascending=False).iloc[0]
+                        if "病歷號" in df_history.columns:
+                            # 2. 強制將資料庫內的病歷號轉為字串，並去除空格
+                            df_history["病歷號"] = df_history["病歷號"].astype(str).str.strip()
                             
-                            # 【去識別化處理】: 僅提取臨床相關資訊
-                            clinical_context = f"""
-                            - 評估日期: {latest_record.get('評估日期', '未知')}
-                            - VAS 疼痛分數: {latest_record.get('VAS分數', '未知')}
-                            - 筋膜判定結果: {latest_record.get('判定結果', '無')}
-                            - 建議處理肌肉: {latest_record.get('建議處理肌肉', '無')}
-                            - 備註總結: {latest_record.get('備註總結', '無')}
-                            """
+                            # 3. 強制將輸入的搜尋值轉為字串，並去除空格
+                            target_id = str(search_id).strip()
                             
-                            # 呼叫 AI
-                            advice = get_kpm_ai_advice(clinical_context)
+                            # 4. 進行篩選
+                            p_data = df_history[df_history["病歷號"] == target_id]
                             
-                            st.success(f"已成功獲取病歷號 {search_id} 的最新紀錄")
-                            st.markdown("---")
-                            st.subheader("📋 KPM AI 衛教建議")
-                            st.markdown(advice)
+                            if not p_data.empty:
+                                # 5. 依日期排序，確保抓到的是「最後一次」 (SOP Rule 1)
+                                latest_record = p_data.sort_values(by="評估日期", ascending=False).iloc[0]
+                                
+                                # 去識別化提取
+                                clinical_context = f"""
+                                筋膜判定結果: {latest_record.get('判定結果', '無資料')}
+                                建議處理肌肉: {latest_record.get('建議處理肌肉', '無資料')}
+                                備註總結: {latest_record.get('備註總結', '無資料')}
+                                """
+                                
+                                advice = get_kpm_ai_advice(clinical_context)
+                                st.success(f"✅ 找到病歷號 {target_id} 的最新紀錄")
+                                st.markdown("---")
+                                st.subheader("📋 KPM AI 衛教建議")
+                                st.markdown(advice)
+                            else:
+                                st.error(f"❌ 找不到病歷號 『{target_id}』。請確認輸入是否正確，或檢查 Tab 5 列表。")
                         else:
-                            st.error(f"找不到病歷號 {search_id} 的紀錄。")
+                            st.error(f"❌ 雲端表頭異常，找不到『病歷號』欄位。目前欄位：{list(df_history.columns)}")
                     else:
-                        st.error("無法連線至雲端資料庫。")
+                        st.error("❌ 無法連線至資料庫。")
 
     # --- 功能二：手動輸入 ---
     else:
