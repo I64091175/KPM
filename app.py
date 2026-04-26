@@ -62,12 +62,19 @@ def get_kpm_ai_advice(clinical_summary):
                 
     return "😴 所有免費模型額度暫時用盡。請靜候一分鐘，或明天再試。您目前的資料已安全存儲在 Tab 5。"
 
-# ==========================================
-# APP NAME: KPM 關鍵點評估系統
-# VERSION: 1.2 (同步紀錄優化版)
-# BASE: V1.2 正式版
-# UPDATE: 2026-04-25
-# ==========================================
+def fetch_data_with_buffer(conn):
+    """
+    優化版抓取：設定 10 秒短快取，避免觸發 Google API 429 限制。
+    """
+    try:
+        # 將 ttl 從 0 改為 10，能有效緩解手機重複點擊的配額消耗
+        return conn.read(worksheet="Sheet1", ttl=10)
+    except Exception as e:
+        if "429" in str(e):
+            st.error("⏳ Google 伺服器繁忙 (配額限制)，請稍候 30 秒再試。")
+        else:
+            st.error(f"❌ 讀取失敗: {str(e)}")
+        return pd.DataFrame()
 
 # 1. 基礎設定
 st.set_page_config(page_title="KPM 筋膜評估系統 V1.3", layout="centered")
