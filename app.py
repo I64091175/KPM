@@ -4,6 +4,41 @@ import pandas as pd
 from streamlit_gsheets import GSheetsConnection
 import plotly.graph_objects as go
 import plotly.express as px
+import google.generativeai as genai  # 新增 Gemini 支援
+
+# --- AI 設定 (依據 SOP: 建議存放在 secrets.toml) ---
+if "GOOGLE_API_KEY" in st.secrets:
+    genai.configure(api_key=st.secrets["AIzaSyDoO3lBTJAsrUch5kBR0T7Vb_OXPbBye8A"])
+else:
+    # 若本地測試尚未設定 secrets，請在此填入 API Key
+    genai.configure(api_key="AIzaSyDoO3lBTJAsrUch5kBR0T7Vb_OXPbBye8A")
+
+# --- AI 核心函式 ---
+def get_kpm_ai_advice(clinical_summary):
+    """
+    呼叫 Gemini 提供衛教建議。
+    邏輯基準：Key point method 與 Anatomy Trains。
+    """
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    
+    system_prompt = """
+    你是一位專業的 KPM 物理治療決策助手以及工作30年經驗的物理治療師。
+    你的任務是根據「關鍵點療法 (KPM)」與「解剖列車 (Anatomy Trains)」的邏輯提供建議。
+    
+    【輸出規範】：
+    1. 口吻：溫和、鼓勵、專業。
+    2. 重點：針對受限的筋膜線提供「居家調整原則」與「日常禁忌」。
+    3. 專業性：若資料中有加權項目(⭐)，請優先針對該部位解釋。
+    4. 警語：結尾必須包含「以上建議僅供參考，請由專業物理治療師現場指導」。
+    """
+    
+    full_prompt = f"{system_prompt}\n\n【病人臨床摘要】：\n{clinical_summary}"
+    
+    try:
+        response = model.generate_content(full_prompt)
+        return response.text
+    except Exception as e:
+        return f"❌ AI 呼叫失敗: {str(e)}"
 
 # ==========================================
 # APP NAME: KPM 關鍵點評估系統
@@ -82,7 +117,15 @@ def display_ui_common(res_list, title):
                     for img in imgs: st.image(f"images/{img}", width=350)
 
 # --- 3. 介面分頁 ---
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["👤 病人資訊", "📝 快速評估", "📊 判定結果", "📚 筋膜圖譜", "📈 歷史追蹤"])
+
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "📋 病人基本資料", 
+    "🦴 主動評估快篩", 
+    "📊 判定結果與建議", 
+    "📈 歷史趨勢追蹤", 
+    "☁️ 雲端紀錄列表",
+    "🤖 AI 臨床助手"
+])
 
 with tab1:
     st.subheader("👤 病人基本資料")
@@ -232,3 +275,72 @@ with tab5:
                     st.dataframe(p_history.sort_values("sort_dt", ascending=False)[display_cols])
             else: st.error("找不到此病歷號")
         else: st.warning("資料庫目前為空。")
+
+with tab6:
+    st.header("🤖 AI 臨床決策助手")
+    st.info("本功能透過 Google Gemini 提供臨床衛教建議，所有資料已進行去識別化處理。")
+
+    ai_func = st.radio("請選擇 AI 功能", ["抓取最後一次評估結果", "手動輸入狀況分析"])
+
+    # --- 功能一：自動抓取 ---
+    if ai_func == "抓取最後一次評估結果":
+        search_id = st.text_input("請輸入病歷號 (p_id) 進行檢索", key="ai_search_id")
+        
+        if st.button("檢索並生成建議"):
+            if not search_id:
+                st.warning("請先輸入病歷號")
+            else:
+                with st.spinner("正在讀取雲端資料並分析..."):
+                    # 從 GSheets 讀取資料 (延續 V1.2 的 conn 邏輯)
+                    df_history = fetch_data_no_cache(conn)
+                    
+                    if not df_history.empty and "病歷號" in df_history.columns:
+                        # 篩選該病歷號，並依照評估日期排序 (取最新)
+                        p_data = df_history[df_history["病歷號"] == search_id]
+                        
+                        if not p_data.empty:
+                            # 依據 SOP Rule 1: 抓取最新一筆
+                            latest_record = p_data.sort_values(by="評估日期", ascending=False).iloc[0]
+                            
+                            # 【去識別化處理】: 僅提取臨床相關資訊
+                            clinical_context = f"""
+                            - 評估日期: {latest_record.get('評估日期', '未知')}
+                            - VAS 疼痛分數: {latest_record.get('VAS分數', '未知')}
+                            - 筋膜判定結果: {latest_record.get('判定結果', '無')}
+                            - 建議處理肌肉: {latest_record.get('建議處理肌肉', '無')}
+                            - 備註總結: {latest_record.get('備註總結', '無')}
+                            """
+                            
+                            # 呼叫 AI
+                            advice = get_kpm_ai_advice(clinical_context)
+                            
+                            st.success(f"已成功獲取病歷號 {search_id} 的最新紀錄")
+                            st.markdown("---")
+                            st.subheader("📋 KPM AI 衛教建議")
+                            st.markdown(advice)
+                        else:
+                            st.error(f"找不到病歷號 {search_id} 的紀錄。")
+                    else:
+                        st.error("無法連線至雲端資料庫。")
+
+    # --- 功能二：手動輸入 ---
+    else:
+        st.subheader("✍️ 手動描述病人狀況")
+        manual_context = st.text_area(
+            "請描述病人狀況（例如：右腰疼痛，久坐加重，MSF 呈現 DA，判定為 SBL 受限）",
+            placeholder="請勿輸入病人姓名、電話或身分證字號",
+            height=150
+        )
+        
+        if st.button("生成分析建議"):
+            if len(manual_context) < 5:
+                st.warning("請輸入更詳細的臨床狀況。")
+            else:
+                with st.spinner("AI 分析中..."):
+                    advice = get_kpm_ai_advice(manual_context)
+                    st.markdown("---")
+                    st.subheader("📋 KPM AI 衛教建議")
+                    st.markdown(advice)
+
+    # 時區顯示 (依據 SOP 要求)
+    st.caption(f"系統時間：{datetime.now(tz_taiwan).strftime('%Y-%m-%d %H:%M:%S')} (Taipei)")
