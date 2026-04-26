@@ -11,7 +11,7 @@ if "GOOGLE_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 else:
     # 若本地測試尚未設定 secrets，請在此填入 API Key
-    genai.configure(api_key="AIzaSyCebe00iGEcFBrAOP3wpYhhXNEUAwY76Ok")
+    genai.configure(api_key="")
 
 # --- AI 核心函式 ---
 def get_kpm_ai_advice(clinical_summary):
@@ -73,7 +73,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🩺 KPM 關鍵點評估系統 V1.2")
+st.title("🩺 KPM 關鍵點評估系統 V1.3")
 
 # --- 2. 核心資料定義 --- [cite: 50-67, 81-83]
 ACTIONS = ["CF", "CE", "CRR", "CRL", "CR", "RAU", "RAD", "LAU", "LAD", "MSF", "MSE", "MSRR", "MSRL", "MSSBR", "MSSBL", "CADS"]
@@ -124,7 +124,7 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "📊 判定結果與建議", 
     "📈 歷史趨勢追蹤", 
     "☁️ 雲端紀錄列表",
-    "🤖 AI 臨床助手"
+    "🤖 AI 臨床助手(測試中)"
 ])
 
 with tab1:
