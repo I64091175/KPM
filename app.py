@@ -11,15 +11,21 @@ if "GOOGLE_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 else:
     # 若本地測試尚未設定 secrets，請在此填入 API Key
-    genai.configure(api_key="AIzaSyCebe00iGEcFBrAOP3wpYhhXNEUAwY76Ok")
+    genai.configure(api_key="AIzaSyA4ukb91j41SDTSnUy4jHbVQYDbL7n13mY")
 
 # --- AI 核心函式 ---
 def get_kpm_ai_advice(clinical_summary):
     """
-    KPM-AI 2026 正式版：使用已確認可用的 Gemini 2.0 模型。
+    KPM-AI 輪詢備援版：自動嘗試多個 2026 可用模型，繞過單一模型額度限制。
     """
-    # 根據您的 API 清單，使用確定的模型路徑
-    MODEL_NAME ='models/gemini-2.0-flash-lite'
+    # 根據你的清單，排定嘗試優先順序
+    # 避開回報 limit 0 的 lite 版本
+    priority_models = [
+        'models/gemini-2.0-flash',      # 優先嘗試 2.0 正式版
+        'models/gemini-flash-latest',   # 備援 1
+        'models/gemini-1.5-flash',      # 備援 2 (若仍存在)
+        'models/gemini-pro-latest'      # 最後備援
+    ]
     
     system_prompt = """
     你是一位專業的 KPM 物理治療決策助手以及工作30年的物理治療師。
@@ -32,18 +38,20 @@ def get_kpm_ai_advice(clinical_summary):
     3. 結尾必含：以上建議僅供參考，請由專業物理治療師現場指導。
     """
     
-    try:
-        model = genai.GenerativeModel(MODEL_NAME)
-        # 2026 新版建議直接傳送字串
-        response = model.generate_content(f"{system_prompt}\n\n【病人臨床摘要】：\n{clinical_summary}")
-        
-        if response and response.text:
-            return response.text
-        else:
-            return "⚠️ AI 回傳內容為空，請稍後再試。"
-            
-    except Exception as e:
-        return f"❌ AI 呼叫失敗。錯誤訊息: {str(e)}"
+    for model_name in priority_models:
+        try:
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(f"{system_prompt}\n\n資料：{clinical_summary}")
+            if response and response.text:
+                return f"✅ (由 {model_name.split('/')[-1]} 生成)\n\n" + response.text
+        except Exception as e:
+            # 檢查是否為 429 錯誤，是的話繼續嘗試下一個模型
+            if "429" in str(e):
+                continue
+            else:
+                return f"❌ AI 呼叫失敗: {str(e)}"
+                
+    return "😴 所有免費模型額度暫時用盡。請靜候一分鐘，或明天再試。您目前的資料已安全存儲在 Tab 5。"
 
 # ==========================================
 # APP NAME: KPM 關鍵點評估系統
@@ -289,7 +297,7 @@ with tab6:
 
     # --- 功能一：自動抓取 ---
     if ai_func == "抓取最後一次評估結果":
-        search_id = st.text_input("請輸入病歷號 (p_id) 進行檢索", key="ai_search_id")
+        search_id = st.text_input("請輸入病歷號進行檢索", key="ai_search_id")
         
         if st.button("檢索並生成建議"):
             if not search_id:
