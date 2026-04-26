@@ -11,7 +11,7 @@ if "GOOGLE_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 else:
     # 若本地測試尚未設定 secrets，請在此填入 API Key
-    genai.configure(api_key="")
+    genai.configure(api_key="AIzaSyCebe00iGEcFBrAOP3wpYhhXNEUAwY76Ok")
 
 # --- AI 核心函式 ---
 def get_kpm_ai_advice(clinical_summary):
@@ -33,6 +33,7 @@ def get_kpm_ai_advice(clinical_summary):
     
     try:
         response = model.generate_content(full_prompt)
+        
         return response.text
     except Exception as e:
         try:
