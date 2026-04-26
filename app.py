@@ -16,44 +16,34 @@ else:
 # --- AI 核心函式 ---
 def get_kpm_ai_advice(clinical_summary):
     """
-    KPM-AI 診斷修復版：嘗試多種模型路徑並提供錯誤診斷。
+    KPM-AI 2026 正式版：使用已確認可用的 Gemini 2.0 模型。
     """
-    # 定義嘗試的模型名稱順序 (針對 2026 API 現狀)
-    model_variants = [
-        'gemini-1.5-flash',
-        'models/gemini-1.5-flash',
-        'gemini-1.5-flash-latest',
-        'gemini-1.0-pro'  # 最後的備援
-    ]
+    # 根據您的 API 清單，使用確定的模型路徑
+    MODEL_NAME = 'models/gemini-2.0-flash'
     
     system_prompt = """
-    你是一位專業的 KPM 物理治療決策助手。
-    請根據臨床摘要提供去識別化的衛教建議，需符合 Anatomy Trains 邏輯。
+    你是一位專業的 KPM 物理治療決策助手以及工作30年的物理治療師。
+    請根據臨床摘要提供去識別化的衛教建議。
+    邏輯需嚴格符合「解剖列車 (Anatomy Trains)」與「關鍵點療法 (KPM)」。
+    
+    【輸出規範】：
+    1. 針對受限筋膜線提供：居家調整建議、日常動作禁忌。
+    2. 若有加權項目 (⭐)，請置頂詳細說明。
+    3. 結尾必含：以上建議僅供參考，請由專業物理治療師現場指導。
     """
     
-    last_error = ""
-    
-    # 自動遍歷嘗試可用模型
-    for model_name in model_variants:
-        try:
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(f"{system_prompt}\n\n資料：{clinical_summary}")
-            if response and response.text:
-                return response.text
-        except Exception as e:
-            last_error = str(e)
-            continue # 失敗則嘗試下一個
-            
-    # 若全部失敗，輸出診斷建議
-    return f"""
-    ❌ AI 呼叫全數失敗。
-    【最後錯誤原因】：{last_error}
-    【建議檢查事項】：
-    1. 前往 Google AI Studio 確認 API Key 是否仍顯示「Active」。
-    2. 確認 Secrets 中的 GOOGLE_API_KEY 是否包含雙引號。
-    3. 點擊下方『運行診斷』按鈕查看可用模型列表。
-    """
+    try:
+        model = genai.GenerativeModel(MODEL_NAME)
+        # 2026 新版建議直接傳送字串
+        response = model.generate_content(f"{system_prompt}\n\n【病人臨床摘要】：\n{clinical_summary}")
         
+        if response and response.text:
+            return response.text
+        else:
+            return "⚠️ AI 回傳內容為空，請稍後再試。"
+            
+    except Exception as e:
+        return f"❌ AI 呼叫失敗。錯誤訊息: {str(e)}"
 
 # ==========================================
 # APP NAME: KPM 關鍵點評估系統
@@ -359,11 +349,3 @@ with tab6:
 
     # 時區顯示 (依據 SOP 要求)
     st.caption(f"系統時間：{datetime.now(tz_taiwan).strftime('%Y-%m-%d %H:%M:%S')} (Taipei)")
-with st.expander("🛠️ 系統診斷工具 (僅限維護使用)"):
-        if st.button("運行診斷：列出可用模型"):
-            try:
-                models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-                st.write("您的 API Key 目前可使用的模型清單：")
-                st.code(models)
-            except Exception as e:
-                st.error(f"無法獲取清單，金鑰可能失效：{str(e)}")
