@@ -15,11 +15,8 @@ else:
 
 # --- AI 核心函式 ---
 def get_kpm_ai_advice(clinical_summary):
-    """
-    呼叫 Gemini 提供衛教建議。
-    邏輯基準：Key point method 與 Anatomy Trains。
-    """
-    model = genai.GenerativeModel('gemini-1.5-flash')
+  
+    model = genai.GenerativeModel(model_name='gemini-1.5-flash')
     
     system_prompt = """
     你是一位專業的 KPM 物理治療決策助手以及工作30年經驗的物理治療師。
@@ -38,7 +35,13 @@ def get_kpm_ai_advice(clinical_summary):
         response = model.generate_content(full_prompt)
         return response.text
     except Exception as e:
-        return f"❌ AI 呼叫失敗: {str(e)}"
+        try:
+            fallback_model = genai.GenerativeModel('gemini-1.0-pro')
+            response = fallback_model.generate_content(full_prompt)
+            return "⚠️ (使用備用模型生成)\n" + response.text
+        except:
+            return f"❌ AI 呼叫失敗: {str(e)}"
+        
 
 # ==========================================
 # APP NAME: KPM 關鍵點評估系統
