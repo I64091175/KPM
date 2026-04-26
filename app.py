@@ -11,12 +11,13 @@ if "GOOGLE_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 else:
     # 若本地測試尚未設定 secrets，請在此填入 API Key
-    genai.configure(api_key="AIzaSyA4ukb91j41SDTSnUy4jHbVQYDbL7n13mY")
+    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 
 # --- AI 核心函式 ---
 def get_kpm_ai_advice(clinical_summary):
     """
     KPM-AI 輪詢備援版：自動嘗試多個 2026 可用模型，繞過單一模型額度限制。
+    KPM-AI 臨床優化版：針對病人產出易懂總結與居家運動處方。
     """
     # 根據你的清單，排定嘗試優先順序
     # 避開回報 limit 0 的 lite 版本
@@ -28,14 +29,22 @@ def get_kpm_ai_advice(clinical_summary):
     ]
     
     system_prompt = """
-    你是一位專業的 KPM 物理治療決策助手。
-    請根據臨床摘要提供去識別化的衛教建議。
-    邏輯需嚴格符合「解剖列車 (Anatomy Trains)」與「關鍵點療法 (KPM)」。
+    你是一位專業的 KPM 物理治療師。請根據臨床摘要產出衛教內容。
     
     【輸出規範】：
-    1. 針對受限筋膜線提供：居家調整建議、日常動作禁忌。
-    2. 若有加權項目 (⭐)，請置頂詳細說明。
-    3. 結尾必含：以上建議僅供參考，請由專業物理治療師現場指導。
+    1. 📋【整體評估總結】：
+       - 請以「病人聽得懂」的白話文解釋目前的身體狀況。
+       - 明確告知接下來的居家運動為何對他有幫助（例如：透過調整筋膜張力，改善動作時的受限與不適）。
+    
+    2. 🧘【居家運動處方】：
+       - 針對受限的筋膜線（若有 ⭐ 加權項目請優先處理），提供具體的居家運動指導。
+       - **必須包含：動作名稱、動作執行細節描述、次數（例如：每組10下，每天3組）。**
+    
+    3. ⚠️【日常動作禁忌】：
+       - 列出該病人在日常生活中應避免的特定姿勢或動作。
+    
+    4. 📜【醫囑警語】：
+       - 結尾必含：以上建議僅供參考，請由專業物理治療師現場指導。
     """
     
     for model_name in priority_models:
