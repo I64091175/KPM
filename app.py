@@ -18,8 +18,14 @@ def get_kpm_ai_advice(clinical_summary, extra_info=""):
     """
     KPM-AI 臨床優化版：針對病人產出易懂總結與具體居家運動處方。
     """
-    MODEL_NAME = 'models/gemini-2.0-flash'
-    
+    fallback_models = [
+        'models/gemini-1.5-flash-latest', 
+        'models/gemini-2.0-flash-lite-001',
+        'models/gemini-1.5-flash',
+        'models/gemini-flash-latest',
+        'models/gemini-pro-latest'
+    ]
+
     system_prompt = """
     你是一位專業的 KPM 物理治療師。請根據提供的臨床摘要產出衛教內容。
     【重要指令】：
@@ -45,12 +51,26 @@ def get_kpm_ai_advice(clinical_summary, extra_info=""):
     
     combined_context = f"評估數據：{clinical_summary}\n備註：{extra_info}"
     
-    try:
-        model = genai.GenerativeModel(MODEL_NAME)
-        response = model.generate_content(f"{system_prompt}\n\n{combined_context}")
-        return response.text if response else "AI 未回傳內容"
-    except Exception as e:
-        return f"❌ 呼叫失敗: {str(e)}"
+    # 自動輪詢模型
+    last_error = ""
+    for model_name in fallback_models:
+        try:
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(f"{system_prompt}\n\n{combined_context}")
+            
+            if response and response.text:
+                # 成功產出，回傳結果 (並標註模型名稱供治療師參考)
+                clean_text = response.text.replace('*', '').replace('#', '')
+                return f"✅ (由 {model_name.split('/')[-1]} 生成)\n\n{clean_text}"
+        
+        except Exception as e:
+            last_error = str(e)
+            # 若發生額度錯誤(429)，則 print log 並繼續嘗試下一個模型
+            print(f"嘗試模型 {model_name} 失敗，正在切換備援... 錯誤: {last_error}")
+            continue 
+
+    # 若所有模型都失敗
+    return f"😴 所有免費模型目前皆無法連線。\n【最後錯誤訊息】：{last_error}\n\n💡 建議：請暫時手動進行衛教，或檢查 Google AI Studio 是否需要更換新專案 API Key。"
 
 def fetch_data_with_buffer(conn):
     """
