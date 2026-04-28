@@ -45,7 +45,7 @@ def get_kpm_ai_advice(clinical_summary, extra_info=""):
     3. ⚠️【日常動作禁忌】：
        - 列出該病人在日常生活中（如久坐、搬物）應避免的特定姿勢。
     
-    4. 📜【醫囑警語】：
+    4. 📜【警語】：
        - 結尾必含：以上建議僅供參考，請由專業物理治療師現場指導。
     """
     
@@ -87,7 +87,7 @@ def fetch_data_with_buffer(conn):
         return pd.DataFrame()
 
 # 1. 基礎設定
-st.set_page_config(page_title="KPM 筋膜評估系統 V1.3.21", layout="centered")
+st.set_page_config(page_title="KPM 筋膜評估系統 V1.3.23", layout="centered")
 tz_taiwan = timezone(timedelta(hours=8))
 
 def fetch_data_no_cache(_conn):
@@ -112,7 +112,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🩺 KPM 關鍵點評估系統 V1.3.21")
+st.title("🩺 KPM 關鍵點評估系統 V1.3.23")
 
 # --- 2. 核心資料定義 --- [cite: 50-67, 81-83]
 ACTIONS = ["CF", "CE", "CRR", "CRL", "CR", "RAU", "RAD", "LAU", "LAD", "MSF", "MSE", "MSRR", "MSRL", "MSSBR", "MSSBL", "CADS"]
