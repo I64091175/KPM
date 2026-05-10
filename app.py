@@ -87,7 +87,7 @@ def fetch_data_with_buffer(conn):
         return pd.DataFrame()
 
 # 1. 基礎設定
-st.set_page_config(page_title="KPM 筋膜評估系統 V1.3.23", layout="centered")
+st.set_page_config(page_title="KPM 筋膜評估系統 V1.3.24", layout="centered")
 tz_taiwan = timezone(timedelta(hours=8))
 
 def fetch_data_no_cache(_conn):
@@ -112,29 +112,168 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🩺 KPM 關鍵點評估系統 V1.3.23")
+st.title("🩺 KPM 關鍵點評估系統 V1.3.24")
 
 # --- 2. 核心資料定義 --- [cite: 50-67, 81-83]
 ACTIONS = ["CF", "CE", "CRR", "CRL", "CR", "RAU", "RAD", "LAU", "LAD", "MSF", "MSE", "MSRR", "MSRL", "MSSBR", "MSSBL", "CADS"]
 TREATMENT_DATABASE = [
-    {"pair": {"CRR", "MSRR"}, "result": "螺旋線 / 骨盆以上 右下到左上後螺旋線", "muscles": "左頭頰、右菱形、右前鉅", "depth": "深層"},
-    {"pair": {"CRL", "MSRL"}, "result": "螺旋線 / 骨盆以上 左下到右上後螺旋線", "muscles": "右頭頰、左菱形、左前鉅", "depth": "深層"},
-    {"pair": {"LAU", "MSRR"}, "result": "後功能線 / 骨盆以上 左後功能線", "muscles": "左闊背", "depth": "淺層"},
-    {"pair": {"RAU", "MSRL"}, "result": "後功能線 / 骨盆以上 右後功能線", "muscles": "右闊背", "depth": "淺層"},
-    {"pair": {"MSF", "MSRR"}, "result": "後功能線 / 骨盆以下 右後功能線", "muscles": "右臀大、右股外側", "depth": "淺層"},
-    {"pair": {"MSF", "MSRL"}, "result": "後功能線 / 骨盆以下 左後功能線", "muscles": "左臀大、左股外側", "depth": "淺層"},
-    {"pair": {"MSE", "MSRR"}, "result": "前功能線 / 骨盆以上 右前功能線", "muscles": "右胸大、右腹直", "depth": "淺層"},
-    {"pair": {"MSE", "MSRL"}, "result": "前功能線 / 骨盆以上 左前功能線", "muscles": "左胸大、左腹直", "depth": "淺層"},
-    {"pair": {"CF", "MSF"}, "result": "淺背線 / 骨盆以上 淺背線", "muscles": "枕下肌、C7-T1交界", "depth": "深層"},
-    {"pair": {"CE", "MSE"}, "result": "深前線 / 骨盆以上 深前線", "muscles": "斜角肌、咀嚼肌", "depth": "深層"},
-    {"pair": {"CR", "MSSBL"}, "result": "側線 / 骨盆以上 右側線", "muscles": "右枕骨邊緣/乳突交界、右髂棘上下", "depth": "深層"},
-    {"pair": {"CR", "MSSBR"}, "result": "側線 / 骨盆以上 左側線", "muscles": "左枕骨邊緣/乳突交界、左髂棘上下", "depth": "深層"},
-    {"pair": {"MSRR", "MSSBL"}, "result": "骨盆以下 右側線或左深前線", "muscles": "加測後判定", "depth": "最後處理"},
-    {"pair": {"MSRL", "MSSBR"}, "result": "骨盆以下 左側線或右深前線", "muscles": "加測後判定", "depth": "最後處理"},
-    {"pair": {"CE", "LAU"}, "result": "左深前臂線", "muscles": "左深前臂線", "depth": "深層"},
-    {"pair": {"CE", "RAU"}, "result": "右深前臂線", "muscles": "右深前臂線", "depth": "深層"},
-    {"pair": {"CRR", "LAD"}, "result": "左深後臂線", "muscles": "左深後臂線", "depth": "深層"},
-    {"pair": {"CRL", "RAD"}, "result": "右深後臂線", "muscles": "右深後臂線", "depth": "深層"}
+    # --- 螺旋線 (Spiral Line) ---
+    {
+        "pair": {"CRR", "MSRR"}, 
+        "result": "螺旋線 / 骨盆以上 右下到左上後螺旋線", 
+        "muscles": "左頭頰、右菱形、右前鉅", 
+        "depth": "深層",
+        "line_code": "SPL",
+        "anatomy_train": "Spiral Line"
+    },
+    {
+        "pair": {"CRL", "MSRL"}, 
+        "result": "螺旋線 / 骨盆以上 左下到右上後螺旋線", 
+        "muscles": "右頭頰、左菱形、左前鉅", 
+        "depth": "深層",
+        "line_code": "SPL",
+        "anatomy_train": "Spiral Line"
+    },
+
+    # --- 後功能線 (Posterior Functional Line) ---
+    {
+        "pair": {"LAU", "MSRR"}, 
+        "result": "後功能線 / 骨盆以上 左後功能線", 
+        "muscles": "左闊背", 
+        "depth": "淺層",
+        "line_code": "FF1",
+        "anatomy_train": "Functional Line"
+    },
+    {
+        "pair": {"RAU", "MSRL"}, 
+        "result": "後功能線 / 骨盆以上 右後功能線", 
+        "muscles": "右闊背", 
+        "depth": "淺層",
+        "line_code": "FF1",
+        "anatomy_train": "Functional Line"
+    },
+    {
+        "pair": {"MSF", "MSRR"}, 
+        "result": "後功能線 / 骨盆以下 右後功能線", 
+        "muscles": "右臀大、右股外側", 
+        "depth": "淺層",
+        "line_code": "FF1",
+        "anatomy_train": "Functional Line"
+    },
+    {
+        "pair": {"MSF", "MSRL"}, 
+        "result": "後功能線 / 骨盆以下 左後功能線", 
+        "muscles": "左臀大、左股外側", 
+        "depth": "淺層",
+        "line_code": "FF1",
+        "anatomy_train": "Functional Line"
+    },
+
+    # --- 前功能線 (Anterior Functional Line) ---
+    {
+        "pair": {"MSE", "MSRR"}, 
+        "result": "前功能線 / 骨盆以上 右前功能線", 
+        "muscles": "右胸大、右腹直", 
+        "depth": "淺層",
+        "line_code": "FF2",
+        "anatomy_train": "Functional Line"
+    },
+    {
+        "pair": {"MSE", "MSRL"}, 
+        "result": "前功能線 / 骨盆以上 左前功能線", 
+        "muscles": "左胸大、左腹直", 
+        "depth": "淺層",
+        "line_code": "FF2",
+        "anatomy_train": "Functional Line"
+    },
+
+    # --- 淺背線 & 深前線 (SBL & DFL) ---
+    {
+        "pair": {"CF", "MSF"}, 
+        "result": "淺背線 / 骨盆以上 淺背線", 
+        "muscles": "枕下肌、C7-T1交界", 
+        "depth": "深層",
+        "line_code": "SBL",
+        "anatomy_train": "Superficial Back Line"
+    },
+    {
+        "pair": {"CE", "MSE"}, 
+        "result": "深前線 / 骨盆以上 深前線", 
+        "muscles": "斜角肌、咀嚼肌", 
+        "depth": "深層",
+        "line_code": "DFL",
+        "anatomy_train": "Deep Front Line"
+    },
+
+    # --- 側線 (Lateral Line) ---
+    {
+        "pair": {"CR", "MSSBL"}, 
+        "result": "側線 / 骨盆以上 右側線", 
+        "muscles": "右枕骨邊緣/乳突交界、右髂棘上下", 
+        "depth": "深層",
+        "line_code": "LL",
+        "anatomy_train": "Lateral Line"
+    },
+    {
+        "pair": {"CR", "MSSBR"}, 
+        "result": "側線 / 骨盆以上 左側線", 
+        "muscles": "左枕骨邊緣/乳突交界、左髂棘上下", 
+        "depth": "深層",
+        "line_code": "LL",
+        "anatomy_train": "Lateral Line"
+    },
+
+    # --- 骨盆以下特殊加測區 (Ankle Trigger) ---
+    {
+        "pair": {"MSRR", "MSSBL"}, 
+        "result": "骨盆以下 右側線或左深前線", 
+        "muscles": "需依踝部加測判定", 
+        "depth": "最後處理",
+        "require_ankle_check": True,
+        "anatomy_train": "LL/DFL Interaction"
+    },
+    {
+        "pair": {"MSRL", "MSSBR"}, 
+        "result": "骨盆以下 左側線或右深前線", 
+        "muscles": "需依踝部加測判定", 
+        "depth": "最後處理",
+        "require_ankle_check": True,
+        "anatomy_train": "LL/DFL Interaction"
+    },
+
+    # --- 深層臂線 (Deep Arm Lines) ---
+    {
+        "pair": {"CE", "LAU"}, 
+        "result": "左深前臂線", 
+        "muscles": "左深前臂線關鍵點", 
+        "depth": "深層",
+        "line_code": "DFAL",
+        "anatomy_train": "Deep Front Arm Line"
+    },
+    {
+        "pair": {"CE", "RAU"}, 
+        "result": "右深前臂線", 
+        "muscles": "右深前臂線關鍵點", 
+        "depth": "深層",
+        "line_code": "DFAL",
+        "anatomy_train": "Deep Front Arm Line"
+    },
+    {
+        "pair": {"CRR", "LAD"}, 
+        "result": "左深後臂線", 
+        "muscles": "左深後臂線關鍵點", 
+        "depth": "深層",
+        "line_code": "DBAL",
+        "anatomy_train": "Deep Back Arm Line"
+    },
+    {
+        "pair": {"CRL", "RAD"}, 
+        "result": "右深後臂線", 
+        "muscles": "右深後臂線關鍵點", 
+        "depth": "深層",
+        "line_code": "DBAL",
+        "anatomy_train": "Deep Back Arm Line"
+    }
 ]
 IMAGE_MAPPING = {"螺旋線": "SPL.jpg", "後功能線": "FF1.jpg", "前功能線": "FF2.jpg", "淺背線": "SBL.jpg", "側線": "LL.jpg", "深前線": "DFL.jpg", "深前臂線": "DFAL.jpg", "深後臂線": "DBAL.jpg"}
 
@@ -188,52 +327,58 @@ with tab2:
 
 with tab3:
     st.subheader("📊 判定結果")
+    
+    # 1. 基礎資料篩選與摘要顯示
     da_list = [k for k, v in user_scores.items() if v == "DA"]
     ds_list = [k for k, v in user_scores.items() if v == "DS"]
     priority_list = [k for k, v in user_priorities.items() if v]
 
     if da_list or ds_list:
         st.write(f"🛑 **DA:** {', '.join(da_list) if da_list else '無'} | ⚠️ **DS:** {', '.join(ds_list) if ds_list else '無'}")
-        if priority_list: st.write(f"🌟 **關鍵加權點:** {', '.join(priority_list)}")
+        if priority_list: 
+            st.write(f"🌟 **關鍵加權點:** {', '.join(priority_list)}")
         st.divider()
 
+    # 2. 核心判定配對邏輯 (遵守同級對應原則)
     weighted_res, da_da_res, ds_ds_res = [], [], []
     for rule in TREATMENT_DATABASE:
-        s1, s2 = user_scores.get(list(rule["pair"])[0]), user_scores.get(list(rule["pair"])[1])
+        pair_elements = list(rule["pair"])
+        s1, s2 = user_scores.get(pair_elements[0]), user_scores.get(pair_elements[1])
+        
+        # 必須 A 與 B 同為 DA 或同時為 DS 才能觸發判定 [cite: 14]
         if s1 and s2 and s1 == s2 and s1 in ["DA", "DS"]:
-            item = {**rule, "grade": s1, "is_prio": not rule["pair"].isdisjoint(set(priority_list))}
-            if item["is_prio"]: weighted_res.append(item)
-            elif s1 == "DA": da_da_res.append(item)
-            else: ds_ds_res.append(item)
+            # 判斷是否包含加權項目 
+            is_prio = not rule["pair"].isdisjoint(set(priority_list))
+            item = {**rule, "grade": s1, "is_prio": is_prio}
+            
+            if is_prio: 
+                weighted_res.append(item)
+            elif s1 == "DA": 
+                da_da_res.append(item)
+            else: 
+                ds_ds_res.append(item)
 
+    # 3. 視覺化結果呈現 (排序：加權 > DA > DS) 
     display_ui_common(weighted_res, "⭐ 加權重點對應")
     display_ui_common(da_da_res, "🟦 DA-DA 對應結果")
     display_ui_common(ds_ds_res, "🟧 DS-DS 對應結果")
 
-    # --- 【新增邏輯：彙整建議處理肌肉字串】 ---
+    # 4. 建議處理肌肉彙整 (去重複)
     all_matched_items = weighted_res + da_da_res + ds_ds_res
-    # 提取所有 matched rule 裡的 muscle，並轉為去重複的清單
     suggested_muscles = []
     for item in all_matched_items:
         m_val = item.get("muscles")
         if m_val:
-            if isinstance(m_val, list):
-                # 如果未來你改成 list 格式，這行能處理
-                suggested_muscles.extend(m_val)
-            else:
-                # 處理目前的字串格式 (如: "左頭頰、右菱形")
-                # 先依據「、」或「,」拆分，確保去重複效果精準
-                parts = str(m_val).replace('、', ',').split(',')
-                suggested_muscles.extend([p.strip() for p in parts])
+            # 處理字串格式並統一分隔符號
+            parts = str(m_val).replace('、', ',').split(',')
+            suggested_muscles.extend([p.strip() for p in parts if p.strip()])
     
-    # 去重複並用逗號隔開
-    if suggested_muscles:
-        unique_muscles_str = "、".join(sorted(list(set(suggested_muscles))))
-    else:
-        unique_muscles_str = "無資料"
-    # 動態紀錄加測結果
+    unique_muscles_str = "、".join(sorted(list(set(suggested_muscles)))) if suggested_muscles else "無資料"
+
+    # 5. 踝部加測互動 UI [cite: 16, 20]
     selected_ankle_options = []
     all_pairs = [" + ".join(sorted(list(r["pair"]))) for r in all_matched_items]
+    
     for p_str in ["MSRR + MSSBL", "MSRL + MSSBR"]:
         if p_str in all_pairs:
             st.markdown(f"<div class='ankle-box'>🔍 偵測到 {p_str} 相對應，請加測：</div>", unsafe_allow_html=True)
@@ -244,58 +389,55 @@ with tab3:
             if st.checkbox(l1, key=f"save_ak1_{p_str}"): selected_ankle_options.append(l1)
             if st.checkbox(l2, key=f"save_ak2_{p_str}"): selected_ankle_options.append(l2)
 
+    # 6. 雲端同步儲存邏輯 [cite: 14, 17]
     st.divider()
-    if st.button("🚀 完成評估並同步雲端"):
-        if not p_name or not p_id: st.error("請輸入姓名與病歷號！")
+    if st.button("🚀 完成評估並同步雲端", use_container_width=True):
+        if not p_name or not p_id: 
+            st.error("請輸入姓名與病歷號！")
         else:
             try:
-                # 整合加測建議紀錄 
+                # A. 整合加測備註
                 ankle_final_str = ""
                 triggered_ankle_pairs = [p for p in ["MSRR + MSSBL", "MSRL + MSSBR"] if p in all_pairs]
                 if triggered_ankle_pairs:
                     base_prompt = f"偵測到 {'、'.join(triggered_ankle_pairs)} 相對應。"
-                    if selected_ankle_options:
-                        ankle_final_str = f"{base_prompt}加測結果：{'、'.join(selected_ankle_options)}"
-                    else:
-                        ankle_final_str = f"{base_prompt}尚未勾選加測結果。"
+                    ankle_final_str = f"{base_prompt}加測結果：{'、'.join(selected_ankle_options)}" if selected_ankle_options else f"{base_prompt}尚未勾選加測結果。"
 
+                # B. 整合備註與動作細節
                 act_notes = [f"{a}:{user_action_notes[a].strip()}" for a in ACTIONS if user_action_notes[a].strip()]
                 prio_tags = [f"{a}(⭐)" for a in priority_list]
                 combined_details = "/".join(act_notes + prio_tags)
                 final_note = f"{p_note} | 詳細: {combined_details}" if p_note and combined_details else (p_note or combined_details)
                 
+                # C. 時間戳記處理 (自動標記補登) 
                 now_tw = datetime.now(tz_taiwan)
                 final_dt_str = now_tw.strftime("%Y-%m-%d %H:%M") if p_date >= now_tw.date() else f"{p_date} (補)"
                 
-                # --- 【核心修正：將肌肉與衛教欄位加入 record 字典】 ---
+                # D. 建構紀錄字典
                 record = {
                     "日期": final_dt_str, 
                     "評估人": p_assessor, 
                     "病人姓名": p_name, 
-                    "病歷號": f"'{p_id}",
+                    "病歷號": f"'{p_id}", # 強制 Excel 為文字格式
                     "病人自覺分數": vas_score, 
                     "加權關鍵點": ", ".join(priority_list),
                     "判定結果": " / ".join([res['result'] for res in all_matched_items]), 
-                    "建議處理肌肉": unique_muscles_str, # <--- 修正點 1
+                    "建議處理肌肉": unique_muscles_str,
                     "備註": final_note, 
                     "加測建議": ankle_final_str,
-                    "AI衛教建議": ""                  # <--- 修正點 2 (預留位置)
+                    "AI衛教建議": "" # 預留給未來 AI Agent
                 }
+                record.update(user_scores) # 加入所有主動測試分數
                 
-                # 更新動作分數
-                record.update(user_scores)
-                
-                # 抓取雲端資料並合併
+                # E. 同步至 Google Sheets 
                 df_old = fetch_data_no_cache(conn)
                 df_final = pd.concat([df_old, pd.DataFrame([record])], ignore_index=True)
-                
-                # 同步回 Google Sheets
                 conn.update(worksheet="Sheet1", data=df_final)
                 
-                st.success(f"✅ 資料已同步！時間：{final_dt_str}")
+                st.success(f"✅ 資料已成功同步！系統時間：{final_dt_str}")
                 st.balloons()
             except Exception as e:
-                st.error(f"同步失敗: {e}")
+                st.error(f"❌ 同步失敗: {str(e)}")
 
 with tab4:
     st.subheader("📚 完整圖譜")
