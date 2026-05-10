@@ -555,9 +555,7 @@ with tab6:
         st.info("以下內容可直接複製")
         st.code(st.session_state.generated_advice, language="text")
         
-        # 額外提供一個「存回雲端」按鈕 (選填)
-        if st.button("💾 將此建議同步至雲端資料庫"):
-            st.toast("此功能需要配合 GSheets Update 權限，目前建議先手動複製。")
+
 
 # 時區顯示 (依據 SOP 要求)
 st.caption(f"系統時間：{datetime.now(tz_taiwan).strftime('%Y-%m-%d %H:%M:%S')} (Taipei)")
