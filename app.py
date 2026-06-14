@@ -100,39 +100,31 @@ def fetch_ai_advice_from_archive(conn, patient_id):
     except:
         return None
 
-def update_ai_advice_to_cloud(conn, patient_id, ai_text, clinical_summary):
+def update_ai_advice_to_cloud(conn, patient_id, ai_text, summary_text):
     """
-    對應您的四欄位結構：日期、病歷號、判定結果、AI衛教建議
+    將衛教資料存入 Sheet2，保持臨床評估表乾淨
     """
     try:
-        # 1. 抓取現有資料
-        df = conn.read(worksheet="Sheet1", ttl=0)
-        # 清洗標題
-        df.columns = df.columns.str.strip()
+        # 1. 準備好要存入的新資料
+        new_row = pd.DataFrame([{
+            "病歷號": patient_id,
+            "日期": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "判定結果": summary_text,
+            "AI衛教建議": ai_text
+        }])
         
-        # 2. 找到該病歷號的列 (確保字串比對)
-        df["_pid_match"] = df["病歷號"].astype(str).str.strip()
-        matched_idx = df[df["_pid_match"] == str(patient_id).strip()].index
+        # 2. 讀取現有存檔庫
+        df_archive = conn.read(worksheet="AI_Education_Archive", ttl=0)
         
-        if len(matched_idx) == 0:
-            st.error("❌ 找不到病歷號，無法寫入。")
-            return False
-            
-        # 3. 定位最新日期列
-        df["日期"] = pd.to_datetime(df["日期"], errors='coerce')
-        target_idx = df.loc[matched_idx].sort_values(by="日期", ascending=False).index[0]
+        # 3. 合併資料
+        df_updated = pd.concat([df_archive, new_row], ignore_index=True)
         
-        # 4. 寫入 (對應您指定的四個欄位)
-        df.at[target_idx, "判定結果"] = clinical_summary
-        df.at[target_idx, "AI衛教建議"] = ai_text
-        
-        # 5. 清理並存回
-        df = df.drop(columns=["_pid_match"])
-        conn.update(worksheet="Sheet1", data=df)
+        # 4. 寫回 Sheet2
+        conn.update(worksheet="AI_Education_Archive", data=df_updated)
         return True
     except Exception as e:
-        st.error(f"寫入雲端失敗: {e}")
-        return False
+        st.error(f"雲端存檔失敗: {e}")
+        return False    
 
 
 def fetch_data_with_buffer(conn):
@@ -175,7 +167,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🩺 KPM 關鍵點評估系統 V1.4.6")
+st.title("🩺 KPM 關鍵點評估系統 V1.4.5")
 
 # --- 2. 核心資料定義 --- [cite: 50-67, 81-83]
 ACTIONS = ["CF", "CE", "CRR", "CRL", "CR", "RAU", "RAD", "LAU", "LAD", "MSF", "MSE", "MSRR", "MSRL", "MSSBR", "MSSBL", "CADS"]
@@ -561,7 +553,11 @@ with tab5:
 
 with tab6:
     st.header("🤖 AI 臨床衛教助手")
-    
+    # 預先定義 target_pid，防止按下按鈕時變數不存在
+    target_pid = None
+    # 若您的第一頁有存病歷號到 st.session_state，建議優先讀取它
+    if 'p_id' in st.session_state:
+        target_pid = st.session_state.p_id
     # 模式選擇
     ai_mode = st.radio(
         "功能選擇", 
@@ -569,82 +565,146 @@ with tab6:
     )
     
     st.markdown("---")
-    
-    # 統一輸入介面：手動輸入模式用這個，其他模式則共用上面的補充資訊欄位
-    if ai_mode == "✍️ 手動輸入狀況分析":
-        manual_context = st.text_area(
-            "請輸入臨床主訴或自由描述", 
-            placeholder="例如：久坐科技廠工程師，主訴右邊高低肩，向前彎腰時大腿後側有嚴重硬緊拉扯感..."
-        )
-    else:
+    st.subheader("🧘 客製化居家衛教處方即時生成")
+
+    # 處理模式一：當前即時評估一鍵生成
+    if ai_mode == "⚡ 根據當前評估一鍵生成":
+        
+        # 修正 1：補充資訊欄位只在需要搭配前頁數據的「模式一」與「模式二」顯示
         extra_note = st.text_area(
             "📝 治療師額外補充資訊", 
             placeholder="例如：病人為高齡長輩、希望在家做的運動不要超過10分鐘、加強核心穩定..."
         )
-    
-    # --- 邏輯執行區 ---
-    # 初始化一個暫存容器，防止按鈕觸發後變數消失
-    if 'temp_summary' not in st.session_state:
-        st.session_state.temp_summary = ""
+        
+        if 'da_list' in locals() and 'ds_list' in locals():
+            判定結果總覽 = f"功能異常且無症狀(DA)項目: {', '.join(da_list)}\n功能異常且有症狀(DS)項目: {', '.join(ds_list)}"
+            
+            if st.button("🚀生成分析建議", key="btn_live_generate"):
+                with st.spinner("KPM-AI 正在對照專家資料庫，進行跨線路動態組裝中..."):
+                    st.session_state.generated_advice = get_kpm_ai_advice(
+                        clinical_summary=判定結果總覽, 
+                        extra_info=extra_note
+                    )
+                st.success("✅ 即時衛教單組裝完成！")
+        else:
+            st.warning("⚠️ 系統偵測到當前診次尚未完成動作快篩評估，請先至前方的評估分頁輸入數據。")
 
-    # 1. 根據模式執行生成
-    if st.button("🚀 生成分析建議"):
-        with st.spinner("KPM-AI 正在對照資料庫..."):
-            
-            if ai_mode == "⚡ 根據當前評估一鍵生成":
-                # 確保 tab 2/3 的變數存在
-                if 'da_list' in globals() and 'ds_list' in globals():
-                    st.session_state.temp_summary = f"功能異常且無症狀(DA)項目: {', '.join(da_list)}\n功能異常且有症狀(DS)項目: {', '.join(ds_list)}"
-                    st.session_state.generated_advice = get_kpm_ai_advice(st.session_state.temp_summary, extra_note)
-                else:
-                    st.warning("⚠️ 尚未完成動作快篩評估，請先至評估頁面。")
-            
-            elif ai_mode == "🔍 抓取歷史評估結果":
-                search_id = st.session_state.get('ai_search_id', '')
-                if search_id:
-                    existing_advice = fetch_ai_advice_from_archive(conn, search_id)
-                    if existing_advice:
-                        st.session_state.generated_advice = existing_advice
-                        st.session_state.temp_summary = "已從歷史紀錄讀取"
-                        st.info("💡 已從雲端資料庫讀取現有衛教資訊。")
-                    else:
-                        st.error("❌ 查無歷史紀錄。")
-            
-            else: # 手動模式
-                st.session_state.temp_summary = manual_context
+    # 處理模式二：抓取雲端歷史紀錄
+    elif ai_mode == "🔍 抓取歷史評估結果":
+        search_id = st.text_input("請輸入病歷號進行檢索", key="ai_search_id")
+        
+        # 滿足模式二的補充需求
+        extra_note = st.text_area(
+            "📝 治療師額外補充資訊", 
+            placeholder="例如：病人希望能加強上肢放鬆..."
+        )
+        
+        if st.button("🚀生成分析建議", key="btn_history_fetch"):
+            with st.spinner("正在搜尋雲端最新資料..."):
+                df_history = fetch_data_with_buffer(conn)
+                if not df_history.empty:
+                    df_history.columns = df_history.columns.str.strip().str.replace('\n', '')
+                    col_pid = next((c for c in df_history.columns if "病歷號" in c), None)
+                    col_date = next((c for c in df_history.columns if "日期" in c), None)
+                    col_ai_record = next((c for c in df_history.columns if "AI衛教建議" in c), None)
+                    
+                    if col_pid:
+                        df_history["pid_clean"] = df_history[col_pid].astype(str).str.lstrip("'").str.strip()
+                        p_data = df_history[df_history["pid_clean"] == str(search_id).strip()].copy()
+                        
+                        if not p_data.empty:
+                            p_data[col_date] = pd.to_datetime(p_data[col_date], errors='coerce')
+                            latest_record = p_data.sort_values(by=col_date, ascending=False).iloc[0]
+                            existing_advice = latest_record.get(col_ai_record, "") if col_ai_record else ""
+                            
+                            if existing_advice and len(str(existing_advice)) > 50:
+                                st.session_state.generated_advice = existing_advice
+                                st.info("💡 已從雲端資料庫讀取現有衛教資訊。")
+                            else:
+                                muscle_info = latest_record.get('建議處理肌肉', '無資料')
+                                clinical_context = f"判定: {latest_record.get('判定結果', '無')}, 肌肉: {muscle_info}"
+                                st.session_state.generated_advice = get_kpm_ai_advice(clinical_context, extra_note)
+                                st.warning("🆕 雲端無舊紀錄，已產生新 AI 衛教。")
+                            
+                            # 儲存當前查詢成功的病歷號，供後續同步雲端使用
+                            st.session_state.current_sync_pid = str(search_id).strip()
+                            st.success("✅ 雲端歷史處理完成")
+                        else:
+                            st.error("❌ 找不到該病歷號")
+
+    # 處理模式三：手動輸入狀況分析
+    else:
+        # 修正 1：完全移除了外部重複的 extra_note，只保留這一個核心描述框，乾淨不混淆
+        manual_context = st.text_area(
+            "請輸入臨床主訴或自由描述", 
+            placeholder="例如：久坐科技廠工程師，主訴右邊高低肩，向前彎腰時大腿後側有嚴重硬緊拉扯感..."
+        )
+        if st.button("🚀生成分析建議", key="btn_manual_generate"):
+            with st.spinner("KPM-AI 正在讀取外部知識邊界，進行文字優化轉譯中..."):
                 st.session_state.generated_advice = get_kpm_ai_advice(manual_context, "")
+            st.success("✅ 自由輸入分析完成！")
 
     # 顯示結果區塊
     if 'generated_advice' in st.session_state and st.session_state.generated_advice:
+        st.markdown("---")
         st.subheader("📋 KPM AI 運動建議")
         st.info("衛教單已生成完畢，可全選複製傳給病人或是影印")
         
-        st.text_area(label="", value=st.session_state.generated_advice, height=400, label_visibility="collapsed")
-        
+        st.text_area(
+            label="", 
+            value=st.session_state.generated_advice, 
+            height=400,
+            label_visibility="collapsed"
+        )
         c_copy, c_sync = st.columns([1, 2])
         
         with c_copy:
-            # 穩定的 JS 複製
-            js_copy = f"""
-            <button onclick="navigator.clipboard.writeText(`{st.session_state.generated_advice.replace('`', '')}`)" 
-            style="width:100%; padding:10px; background:#FF4B4B; color:white; border:none; border-radius:4px; cursor:pointer;">
-            📋 一鍵複製全文
+            js_copy_code = f"""
+            <script>
+            function copyToClipboard() {{
+                const text = `{st.session_state.generated_advice}`;
+                navigator.clipboard.writeText(text).then(function() {{
+                    alert('📋 全文已成功複製到剪貼簿！');
+                }}, function(err) {{
+                    alert('複製失敗，請手動全選滑鼠右鍵複製');
+                }});
+            }}
+            </script>
+            <button onclick="copyToClipboard()" style="
+                background-color: #FF4B4B; color: white; border: none; 
+                padding: 8px 16px; text-align: center; font-size: 14px; 
+                margin: 4px 2px; cursor: pointer; border-radius: 4px; width: 100%;">
+                📋 一鍵複製全文
             </button>
             """
-            st.components.v1.html(js_copy, height=50)
+            st.components.v1.html(js_copy_code, height=50)
             
         with c_sync:
+            # 這裡我們明確定義當下要同步的病歷號
             if st.button("💾 將此建議同步保存至該病患雲端欄位"):
-                # 確保病歷號來源正確
-                target_pid = st.session_state.get('ai_search_id') or st.session_state.get('p_id')
                 
+                # A. 如果是「抓取歷史」，使用歷史檢索出來的病歷號
+                if ai_mode == "🔍 抓取歷史評估結果" and "current_sync_pid" in st.session_state:
+                    target_pid = st.session_state.current_sync_pid
+                
+                # B. 如果是「即時生成」，強制嘗試從第一頁傳過來的變數抓取
+                elif ai_mode == "⚡ 根據當前評估一鍵生成":
+                    # 確保這裡抓到的是第一頁輸入的病歷號
+                    target_pid = st.session_state.get('p_id', None) 
+                
+                # 執行寫入
                 if target_pid:
-                    with st.spinner("正在同步..."):
-                        if update_ai_advice_to_cloud(conn, target_pid, st.session_state.generated_advice, st.session_state.temp_summary):
-                            st.success("🎉 已寫回雲端！")
+                    with st.spinner("正在尋找對應病歷號，寫入 AI 衛教建議..."):
+                        # 判定結果總覽也需要確保存在，若為空給予預設值
+                        summary = locals().get('判定結果總覽', '無判定紀錄')
+                        
+                        success = update_ai_advice_to_cloud(conn, target_pid, st.session_state.generated_advice, summary)
+                        if success:
+                            st.success(f"🎉 病歷號 {target_pid} 的 AI 衛教建議已成功寫回雲端！")
                         else:
-                            st.error("同步失敗，請檢查欄位名稱")
+                            st.error("同步失敗，請檢查網路連線或 Sheet1 欄位名稱。")
                 else:
-                    st.warning("⚠️ 無法定位病歷號，請手動複製。")
+                    st.warning("⚠️ 無法定位病歷號。若為「手動輸入模式」，請使用「一鍵複製」功能。")
+
 # 時區顯示 (依據 SOP 要求)
 st.caption(f"系統時間：{datetime.now(tz_taiwan).strftime('%Y-%m-%d %H:%M:%S')} (Taipei)")
