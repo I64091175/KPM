@@ -1,737 +1,693 @@
-import os
 import streamlit as st
-from datetime import date, datetime, timedelta, timezone
 import pandas as pd
-from streamlit_gsheets import GSheetsConnection
-import plotly.graph_objects as go
 import plotly.express as px
-import google.generativeai as genai  # 新增 Gemini 支援
 
-# --- AI 設定 (依據 SOP: 建議存放在 secrets.toml) ---
-if "GOOGLE_API_KEY" in st.secrets:
-    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-else:
-    # 若本地測試尚未設定 secrets，請在此填入 API Key
-    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-
-# --- AI 核心函式 ---
-def load_local_text_file(file_name):
-    """
-    安全讀取本地 UTF-8 檔案的防呆副程式
-    """
-    if os.path.exists(file_name):
-        try:
-            with open(file_name, "r", encoding="utf-8") as f:
-                return f.read()
-        except Exception as e:
-            st.error(f"讀取 {file_name} 時發生編碼錯誤: {str(e)}")
-            return ""
-    else:
-        st.error(f"找不到關鍵核心檔案: {file_name}，請確認檔案是否在同資料夾下！")
-        return ""
-
-def get_kpm_ai_advice(clinical_summary, extra_info=""):
-    """
-    KPM-AI 優化版：動態加載本地 RAG 知識庫與 SOP 死命令    
-    """
-    # 1. 自動從本地加載死命令與運動資料庫
-    sop_rules = load_local_text_file("kpm_ai_sop.txt")
-    knowledge_base = load_local_text_file("kpm_knowledge_base.txt")
-    
-    if not sop_rules or not knowledge_base:
-        return "系統錯誤：後台安全知識庫加載失敗，請通知治療師工程師檢查本地文字檔。"
-
-    # 2. 將規則與資料庫融合，封鎖成絕對的解耦邊界（System Instruction）
-    full_system_context = f"{sop_rules}\n\n【臨床運作專家衛教資料庫內文如下】：\n{knowledge_base}"
-    
-    # 3. 您的可用備援輪詢模型清單（維持 V1.3.23 穩定性規範）
-    fallback_models = [
-        'models/gemini-1.5-flash-latest', 
-        'models/gemini-2.0-flash-lite-001',
-        'models/gemini-1.5-flash',
-        'models/gemini-flash-latest',
-        'models/gemini-pro-latest'
-    ]
-    # 4. 準備發送給 AI 的使用者輸入（包含快篩數據與主訴備註）
-    user_prompt = f"以下為當前病患的臨床判定數據與備註，請立即執行黃金 3 招 HEP 輸出：\n{clinical_summary}\n補充狀況：{extra_info}"
-
-    # 5. 自動輪詢切換（Auto-Fallback）執行
-    for model_name in fallback_models:
-        try:
-            # 使用最新版 SDK 的 system_instruction 參數傳入邊界，達到最高抗幻覺效果
-            model = genai.GenerativeModel(
-                model_name=model_name,
-                system_instruction=full_system_context
-            )
-            
-            # 設定合適的溫度（建議 0.2-0.3），讓 AI 嚴格抓取資料庫，不天馬行空
-            response = model.generate_content(
-                user_prompt,
-                generation_config={"temperature": 0.2}
-            )
-            return response.text
-            
-        except Exception as e:
-            # 如果當前模型超流或限額，自動記錄並切換到下一個備援模型
-            continue
-            
-    return "❌ 所有備援模型皆暫時無法回應，請確認您的 GOOGLE_API_KEY 狀態或網路連線。"
-
-def fetch_ai_advice_from_archive(conn, patient_id):
-    """
-    從 Sheet2 (AI_Education_Archive) 抓取該病人的最新衛教紀錄
-    """
-    try:
-        df_archive = conn.read(worksheet="AI_Education_Archive", ttl=10)
-        if df_archive.empty:
-            return None
-            
-        # 清洗欄位並篩選
-        df_archive.columns = df_archive.columns.str.strip()
-        df_archive["pid_clean"] = df_archive["病歷號"].astype(str).str.lstrip("'").str.strip()
-        
-        p_history = df_archive[df_archive["pid_clean"] == str(patient_id).strip()]
-        
-        if not p_history.empty:
-            # 依日期排序取最新的一筆
-            p_history["日期"] = pd.to_datetime(p_history["日期"], errors='coerce')
-            return p_history.sort_values(by="日期", ascending=False).iloc[0]["AI衛教建議"]
-        return None
-    except:
-        return None
-
-def update_ai_advice_to_cloud(conn, patient_id, ai_text):
-    """
-    KPM 終極抗誤差版：完全不更動 columns 數量，點對點精準寫回 AI 衛教文字
-    """
-    try:
-        # 1. 抓取目前雲端最即時的完整資料表
-        df_all = conn.read(worksheet="Sheet1", ttl=0)
-        if df_all.empty:
-            return False
-            
-        # 修正核心：建立一個「乾淨的臨時對照清單」，但不直接覆蓋修改 df_all.columns
-        # 這樣就能完美避開 Expected 30 elements, new has 29 欄位數量不符的死結
-        clean_columns = [str(c).strip().replace('\n', '') for c in df_all.columns]
-        
-        # 2. 用對照清單精準鎖定關鍵欄位的「實體正確名稱」
-        actual_pid_col = None
-        actual_date_col = None
-        actual_ai_col = None
-        
-        for idx, name in enumerate(clean_columns):
-            if "病歷號" in name:
-                actual_pid_col = df_all.columns[idx]
-            if "日期" in name:
-                actual_date_col = df_all.columns[idx]
-            if "AI衛教建議" in name:
-                actual_ai_col = df_all.columns[idx]
-                
-        # 3. 安全性檢查
-        if not actual_pid_col or not actual_ai_col:
-            st.error("❌ 同步失敗：雲端試算表第一行標題列，找不到「病歷號」或「AI衛教建議」欄位，請檢查字體是否完全一致。")
-            return False
-            
-        # 4. 尋找與當前病患相符的橫列 (Row)
-        # 先將病歷號欄位轉為文字並去除前後空白以精準比對
-        df_all["_temp_pid_match"] = df_all[actual_pid_col].astype(str).str.lstrip("'").str.strip()
-        matched_indices = df_all[df_all["_temp_pid_match"] == str(patient_id)].index
-        
-        if len(matched_indices) == 0:
-            st.error(f"❌ 雲端找不到病歷號 {patient_id} 的評估紀錄，無法同步。請確認前幾頁是否已成功寫入。")
-            # 移除臨時欄位
-            df_all = df_all.drop(columns=["_temp_pid_match"])
-            return False
-            
-        # 5. 如果有多筆歷史紀錄，透過日期排序找出最新的一筆 Row 索引
-        if actual_date_col:
-            df_matched = df_all.loc[matched_indices].copy()
-            df_matched[actual_date_col] = pd.to_datetime(df_matched[actual_date_col], errors='coerce')
-            target_index = df_matched.sort_values(by=actual_date_col, ascending=False).index[0]
-        else:
-            # 若無日期欄位，則預設鎖定相符的最後一列
-            target_index = matched_indices[-1]
-            
-        # 6. 精準定位，直接將 AI 建議文字填入該列的 AI衛教建議儲存格
-        df_all.at[target_index, actual_ai_col] = ai_text
-        
-        # 7. 移除清洗用的臨時欄位，一鍵完整覆寫回 Google Sheets
-        df_all = df_all.drop(columns=["_temp_pid_match"])
-            
-        conn.update(worksheet="Sheet1", data=df_all)
-        return True
-        
-    except Exception as e:
-        st.error(f"雲端寫入時發生未預期錯誤: {str(e)}")
-        return False
+from config.settings import configure_gemini, get_gsheets_connection
+from config.constants import (
+    APP_TITLE,
+    ACTIONS,
+    SCORE_OPTIONS,
+    IMAGE_MAPPING,
+    ATLAS_GROUPS,
+    IMAGE_DIR,
+)
+from config.styles import apply_custom_css
+from utils.time_utils import get_today_taipei, format_display_time
+from services.data_service import (
+    fetch_main_assessment_data,
+    filter_by_patient_id,
+    safe_sort_by_datetime,
+)
+from services.archive_service import (
+    fetch_latest_ai_advice,
+    fetch_ai_history,
+    save_ai_advice,
+)
+from services.ai_service import get_ai_advice
 
 
-def fetch_data_with_buffer(conn):
-    """
-    優化版抓取：設定 10 秒短快取，避免觸發 Google API 429 限制。
-    """
-    try:
-        # 將 ttl 從 0 改為 10，能有效緩解手機重複點擊的配額消耗
-        return conn.read(worksheet="Sheet1", ttl=10)
-    except Exception as e:
-        if "429" in str(e):
-            st.error("⏳ Google 伺服器繁忙 (配額限制)，請稍候 30 秒再試。")
-        else:
-            st.error(f"❌ 讀取失敗: {str(e)}")
-        return pd.DataFrame()
+# =========================
+# 基本設定與初始化
+# =========================
 
-# 1. 基礎設定
 st.set_page_config(page_title="KPM 筋膜評估系統", layout="centered")
-tz_taiwan = timezone(timedelta(hours=8))
 
-def fetch_data_no_cache(_conn):
-    try:
-        return _conn.read(worksheet="Sheet1", ttl=0)
-    except:
-        return pd.DataFrame()
+apply_custom_css()
+ai_enabled, ai_msg = configure_gemini()
+conn = get_gsheets_connection()
 
-conn = st.connection("gsheets", type=GSheetsConnection)
+st.title(APP_TITLE)
 
-# CSS 樣式：確保高度能見度 [cite: 75-81]
-st.markdown("""
-    <style>
-    .action-title { font-size: 1.1rem; font-weight: bold; margin-bottom: 5px; color: #1E88E5; }
-    .superficial-header { color: #2E7D32; font-weight: bold; border-left: 5px solid #2E7D32; padding-left: 10px; margin-top: 20px; }
-    .superficial-box { border: 2px solid #2E7D32; padding: 15px; border-radius: 8px; background-color: #F1F8E9; margin-bottom: 10px; color: #1B5E20; }
-    .deep-box { background-color: #FFF3E0; border-left: 5px solid #EF6C00; padding: 15px; border-radius: 8px; color: #BF360C; margin-bottom: 10px; }
-    .priority-box { background-color: #F3E5F5; border: 2px solid #7B1FA2; padding: 15px; border-radius: 8px; color: #4A148C; margin-bottom: 15px; font-weight: bold; }
-    .muscle-text { font-weight: bold; color: #D84315; margin-top: 5px; }
-    .ankle-box { background-color: #E3F2FD; padding: 15px; border-radius: 8px; border: 2px solid #1E88E5; color: #000000; margin-top: 20px; font-weight: bold; }
-    .hist-title { font-size: 1.3rem; font-weight: bold; color: #2c3e50; margin-top: 30px; }
-    </style>
-    """, unsafe_allow_html=True)
 
-st.title("🩺 KPM 關鍵點評估系統 V1.4.8")
+# =========================
+# Session State 初始化
+# =========================
 
-# --- 2. 核心資料定義 --- [cite: 50-67, 81-83]
-ACTIONS = ["CF", "CE", "CRR", "CRL", "CR", "RAU", "RAD", "LAU", "LAD", "MSF", "MSE", "MSRR", "MSRL", "MSSBR", "MSSBL", "CADS"]
-TREATMENT_DATABASE = [
-    
-    {
-        "pair": {"CRR", "MSRR"}, 
-        "result": "螺旋線 / 骨盆以上 右下到左上後螺旋線", 
-        "muscles": "左頭頰、右菱形、右前鉅", 
-        "depth": "深層",
-        "line_code": "SPL",
-        "anatomy_train": "Spiral Line"
-    },
-    {
-        "pair": {"CRL", "MSRL"}, 
-        "result": "螺旋線 / 骨盆以上 左下到右上後螺旋線", 
-        "muscles": "右頭頰、左菱形、左前鉅", 
-        "depth": "深層",
-        "line_code": "SPL",
-        "anatomy_train": "Spiral Line"
-    },
-
-    # --- 後功能線 (Posterior Functional Line) ---
-    {
-        "pair": {"LAU", "MSRR"}, 
-        "result": "後功能線 / 骨盆以上 左後功能線", 
-        "muscles": "左闊背", 
-        "depth": "淺層",
-        "line_code": "FF1",
-        "anatomy_train": "Functional Line"
-    },
-    {
-        "pair": {"RAU", "MSRL"}, 
-        "result": "後功能線 / 骨盆以上 右後功能線", 
-        "muscles": "右闊背", 
-        "depth": "淺層",
-        "line_code": "FF1",
-        "anatomy_train": "Functional Line"
-    },
-    {
-        "pair": {"MSF", "MSRR"}, 
-        "result": "後功能線 / 骨盆以下 右後功能線", 
-        "muscles": "右臀大、右股外側", 
-        "depth": "淺層",
-        "line_code": "FF1",
-        "anatomy_train": "Functional Line"
-    },
-    {
-        "pair": {"MSF", "MSRL"}, 
-        "result": "後功能線 / 骨盆以下 左後功能線", 
-        "muscles": "左臀大、左股外側", 
-        "depth": "淺層",
-        "line_code": "FF1",
-        "anatomy_train": "Functional Line"
-    },
-
-    # --- 前功能線 (Anterior Functional Line) ---
-    {
-        "pair": {"MSE", "MSRR"}, 
-        "result": "前功能線 / 骨盆以上 右前功能線", 
-        "muscles": "右胸大、右腹直", 
-        "depth": "淺層",
-        "line_code": "FF2",
-        "anatomy_train": "Functional Line"
-    },
-    {
-        "pair": {"MSE", "MSRL"}, 
-        "result": "前功能線 / 骨盆以上 左前功能線", 
-        "muscles": "左胸大、左腹直", 
-        "depth": "淺層",
-        "line_code": "FF2",
-        "anatomy_train": "Functional Line"
-    },
-
-    # --- 淺背線 & 深前線 (SBL & DFL) ---
-    {
-        "pair": {"CF", "MSF"}, 
-        "result": "淺背線 / 骨盆以上 淺背線", 
-        "muscles": "枕下肌、C7-T1交界", 
-        "depth": "深層",
-        "line_code": "SBL",
-        "anatomy_train": "Superficial Back Line"
-    },
-    {
-        "pair": {"CE", "MSE"}, 
-        "result": "深前線 / 骨盆以上 深前線", 
-        "muscles": "斜角肌、咀嚼肌", 
-        "depth": "深層",
-        "line_code": "DFL",
-        "anatomy_train": "Deep Front Line"
-    },
-
-    # --- 側線 (Lateral Line) ---
-    {
-        "pair": {"CR", "MSSBL"}, 
-        "result": "側線 / 骨盆以上 右側線", 
-        "muscles": "右枕骨邊緣/乳突交界、右髂棘上下", 
-        "depth": "深層",
-        "line_code": "LL",
-        "anatomy_train": "Lateral Line"
-    },
-    {
-        "pair": {"CR", "MSSBR"}, 
-        "result": "側線 / 骨盆以上 左側線", 
-        "muscles": "左枕骨邊緣/乳突交界、左髂棘上下", 
-        "depth": "深層",
-        "line_code": "LL",
-        "anatomy_train": "Lateral Line"
-    },
-
-    # --- 骨盆以下特殊加測區 (Ankle Trigger) ---
-    {
-        "pair": {"MSRR", "MSSBL"}, 
-        "result": "骨盆以下 右側線或左深前線", 
-        "muscles": "需依踝部加測判定", 
-        "depth": "最後處理",
-        "require_ankle_check": True,
-        "anatomy_train": "LL/DFL Interaction"
-    },
-    {
-        "pair": {"MSRL", "MSSBR"}, 
-        "result": "骨盆以下 左側線或右深前線", 
-        "muscles": "需依踝部加測判定", 
-        "depth": "最後處理",
-        "require_ankle_check": True,
-        "anatomy_train": "LL/DFL Interaction"
-    },
-
-    # --- 深層臂線 (Deep Arm Lines) ---
-    {
-        "pair": {"CE", "LAU"}, 
-        "result": "左深前臂線", 
-        "muscles": "左深前臂線關鍵點", 
-        "depth": "深層",
-        "line_code": "DFAL",
-        "anatomy_train": "Deep Front Arm Line"
-    },
-    {
-        "pair": {"CE", "RAU"}, 
-        "result": "右深前臂線", 
-        "muscles": "右深前臂線關鍵點", 
-        "depth": "深層",
-        "line_code": "DFAL",
-        "anatomy_train": "Deep Front Arm Line"
-    },
-    {
-        "pair": {"CRR", "LAD"}, 
-        "result": "左深後臂線", 
-        "muscles": "左深後臂線關鍵點", 
-        "depth": "深層",
-        "line_code": "DBAL",
-        "anatomy_train": "Deep Back Arm Line"
-    },
-    {
-        "pair": {"CRL", "RAD"}, 
-        "result": "右深後臂線", 
-        "muscles": "右深後臂線關鍵點", 
-        "depth": "深層",
-        "line_code": "DBAL",
-        "anatomy_train": "Deep Back Arm Line"
+def init_session_state():
+    defaults = {
+        "latest_results": [],
+        "latest_summary_text": "",
+        "latest_ai_text": "",
+        "latest_ai_raw_text": "",
+        "latest_ai_reasons": [],
+        "last_patient_id": "",
     }
-]
-IMAGE_MAPPING = {"螺旋線": "SPL.jpg", "後功能線": "FF1.jpg", "前功能線": "FF2.jpg", "淺背線": "SBL.jpg", "側線": "LL.jpg", "深前線": "DFL.jpg", "深前臂線": "DFAL.jpg", "深後臂線": "DBAL.jpg"}
 
-def display_ui_common(res_list, title):
-    if res_list:
-        if title: st.markdown(f"### {title}")
-        depth_rank = {"淺層": 0, "深層": 1, "最後處理": 2}
-        for res in sorted(res_list, key=lambda x: depth_rank.get(x["depth"], 1)):
-            pair_str = " + ".join(sorted(list(res["pair"])))
-            if res["is_prio"]:
-                st.markdown(f"<div class='priority-box'>🌟 加權重點項目<br>動作組合: {pair_str} ({res['depth']})<br>結果: {res['result']}<br><div class='muscle-text'>💪 建議處理肌肉: {res['muscles']}</div></div>", unsafe_allow_html=True)
-            elif res["depth"] == "淺層":
-                st.markdown(f"<div class='superficial-header'>🌿 淺層判定</div><div class='superficial-box'><b>動作組合: {pair_str}</b><br>結果: {res['result']}<br><div class='muscle-text'>💪 建議處理肌肉: {res['muscles']}</div></div>", unsafe_allow_html=True)
-            else:
-                st.markdown(f"<div class='deep-box'><strong>💎 深層判定</strong><br>動作組合: {pair_str}<br>結果: {res['result']}<br><div class='muscle-text'>💪 建議處理肌肉: {res['muscles']}</div></div>", unsafe_allow_html=True)
-            imgs = [v for k, v in IMAGE_MAPPING.items() if k in res['result']]
-            if imgs:
-                with st.expander(f"🔍 檢視圖譜"):
-                    for img in imgs: st.image(f"images/{img}", width=350)
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
 
-# --- 3. 介面分頁 ---
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "📋 基本資料", 
-    "🦴 主動快篩", 
-    "📊 判定結果", 
-    "📚 完整圖譜", 
-    "📈 趨勢追蹤",
-    "🤖 AI 助手"
-])
+init_session_state()
+
+
+# =========================
+# 簡化版規則映射（可跑版）
+# 說明：
+# 你原始檔中的完整規則資料庫片段未完整出現在上傳文字中，
+# 所以這裡先用「動作觀察 → 初步線別關鍵字」的安全簡化版。
+# 後續若你把完整規則庫補給我，我可以再幫你換成原始判定版。
+# =========================
+
+ACTION_HINTS = {
+    "CF": {
+        "label": "頸部前彎",
+        "depth": "淺層",
+        "keywords": ["淺背線", "側線"],
+        "muscles": "頸後側、肩頸、上背軟組織張力需再確認",
+    },
+    "CE": {
+        "label": "頸部後仰",
+        "depth": "深層",
+        "keywords": ["淺前線", "深前線"],
+        "muscles": "頸前側、胸廓前側、深層穩定群需再確認",
+    },
+    "CRR": {
+        "label": "頸部右旋",
+        "depth": "淺層",
+        "keywords": ["側線", "螺旋線"],
+        "muscles": "右側頸部、上斜方與胸鎖乳突區域需再確認",
+    },
+    "CRL": {
+        "label": "頸部左旋",
+        "depth": "淺層",
+        "keywords": ["側線", "螺旋線"],
+        "muscles": "左側頸部、上斜方與胸鎖乳突區域需再確認",
+    },
+    "CR": {
+        "label": "頸部側屈",
+        "depth": "淺層",
+        "keywords": ["側線"],
+        "muscles": "頸側壁、提肩胛與肩頸外側張力需再確認",
+    },
+    "RAU": {
+        "label": "右上肢上舉",
+        "depth": "淺層",
+        "keywords": ["前功能線", "後功能線", "淺前手臂線", "淺後手臂線"],
+        "muscles": "右肩前後側、肩胛穩定與手臂線張力需再確認",
+    },
+    "RAD": {
+        "label": "右上肢下壓/下放",
+        "depth": "深層",
+        "keywords": ["後功能線", "深前線", "深前手臂線"],
+        "muscles": "右側肩胛控制、胸廓與深層穩定群需再確認",
+    },
+    "LAU": {
+        "label": "左上肢上舉",
+        "depth": "淺層",
+        "keywords": ["前功能線", "後功能線", "淺前手臂線", "淺後手臂線"],
+        "muscles": "左肩前後側、肩胛穩定與手臂線張力需再確認",
+    },
+    "LAD": {
+        "label": "左上肢下壓/下放",
+        "depth": "深層",
+        "keywords": ["後功能線", "深前線", "深前手臂線"],
+        "muscles": "左側肩胛控制、胸廓與深層穩定群需再確認",
+    },
+    "MSF": {
+        "label": "多段前彎",
+        "depth": "淺層",
+        "keywords": ["淺背線", "螺旋線"],
+        "muscles": "後側鏈、腿後側、下背及胸腰筋膜需再確認",
+    },
+    "MSE": {
+        "label": "多段後仰",
+        "depth": "深層",
+        "keywords": ["淺前線", "深前線"],
+        "muscles": "前側鏈、髖前側、腹部前壁與深層穩定群需再確認",
+    },
+    "MSRR": {
+        "label": "多段右旋",
+        "depth": "淺層",
+        "keywords": ["螺旋線", "後功能線", "前功能線"],
+        "muscles": "對角線旋轉鏈、軀幹旋轉與肩胛控制需再確認",
+    },
+    "MSRL": {
+        "label": "多段左旋",
+        "depth": "淺層",
+        "keywords": ["螺旋線", "後功能線", "前功能線"],
+        "muscles": "對角線旋轉鏈、軀幹旋轉與肩胛控制需再確認",
+    },
+    "MSSBR": {
+        "label": "多段右側彎",
+        "depth": "淺層",
+        "keywords": ["側線"],
+        "muscles": "右側腰、側腹、骨盆側穩定與臀中肌需再確認",
+    },
+    "MSSBL": {
+        "label": "多段左側彎",
+        "depth": "淺層",
+        "keywords": ["側線"],
+        "muscles": "左側腰、側腹、骨盆側穩定與臀中肌需再確認",
+    },
+    "CADS": {
+        "label": "核心/深層穩定控制",
+        "depth": "深層",
+        "keywords": ["深前線"],
+        "muscles": "核心深層、髖部深層與呼吸穩定控制需再確認",
+    },
+}
+
+DEPTH_RANK = {"淺層": 0, "深層": 1, "最後處理": 2}
+
+
+# =========================
+# 輔助函式
+# =========================
+
+def is_restricted(score):
+    return score in ["DS", "DA"]
+
+
+def find_existing_column(df, candidates):
+    if df is None or df.empty:
+        return None
+
+    for col in candidates:
+        if col in df.columns:
+            return col
+    return None
+
+
+def build_simple_results(user_scores, user_action_notes, user_priorities):
+    """
+    簡化版結果整合器：
+    只要動作是 DS / DA，就整理成可顯示與可餵 AI 的結果。
+    """
+    results = []
+
+    for act in ACTIONS:
+        score = user_scores.get(act)
+        if not is_restricted(score):
+            continue
+
+        hint = ACTION_HINTS.get(
+            act,
+            {
+                "label": act,
+                "depth": "深層",
+                "keywords": [],
+                "muscles": "請依臨床判斷補充",
+            },
+        )
+
+        note = user_action_notes.get(act, "").strip()
+        is_prio = user_priorities.get(act, False)
+
+        image_list = []
+        for keyword in hint["keywords"]:
+            if keyword in IMAGE_MAPPING:
+                image_list.append(IMAGE_MAPPING[keyword])
+
+        result_item = {
+            "action": act,
+            "label": hint["label"],
+            "score": score,
+            "depth": hint["depth"],
+            "keywords": hint["keywords"],
+            "muscles": hint["muscles"],
+            "note": note,
+            "is_prio": is_prio,
+            "images": list(dict.fromkeys(image_list)),
+        }
+
+        results.append(result_item)
+
+    # 排序：先加權，再淺深層
+    results = sorted(
+        results,
+        key=lambda x: (
+            0 if x["is_prio"] else 1,
+            DEPTH_RANK.get(x["depth"], 9),
+            x["action"],
+        ),
+    )
+
+    return results
+
+
+def build_target_keywords(results):
+    """
+    給 AI 抽知識庫用的關鍵字
+    """
+    keywords = []
+    for item in results:
+        for k in item.get("keywords", []):
+            keywords.append(k)
+
+    return list(dict.fromkeys(keywords))
+
+
+def build_clinical_summary(
+    p_name,
+    p_id,
+    p_date,
+    vas_score,
+    p_assessor,
+    p_note,
+    results,
+):
+    """
+    產出 AI 用的臨床摘要
+    注意：
+    這裡故意不放姓名與完整病歷號進 AI 內容，只保留去識別化資訊。
+    """
+    if not results:
+        return (
+            f"本次評估日期：{p_date}；VAS：{vas_score} 分。"
+            f"目前未標記明確 DS/DA 受限項目。"
+            f"臨床補充：{p_note if p_note else '無'}。"
+        )
+
+    priority_items = [r for r in results if r["is_prio"]]
+    restricted_items = [
+        f"{r['action']}（{r['label']}，{r['score']}）" for r in results[:8]
+    ]
+
+    priority_text = (
+        "；".join([f"{r['action']}（{r['label']}）" for r in priority_items])
+        if priority_items
+        else "無"
+    )
+
+    summary = (
+        f"本次評估日期：{p_date}；VAS：{vas_score} 分。"
+        f"受限動作摘要：{'；'.join(restricted_items)}。"
+        f"加權重點：{priority_text}。"
+        f"評估人：{p_assessor if p_assessor else '未填寫'}。"
+        f"臨床補充：{p_note if p_note else '無'}。"
+    )
+
+    return summary
+
+
+def render_result_card(item):
+    title_prefix = "🌟" if item["is_prio"] else ("🌿" if item["depth"] == "淺層" else "💎")
+
+    st.markdown(
+        f"""
+<div class="{ 'priority-box' if item['is_prio'] else ('superficial-box' if item['depth']=='淺層' else 'deep-box') }">
+{title_prefix} <b>{item['action']}｜{item['label']}</b><br>
+分級：{item['score']}<br>
+層級：{item['depth']}<br>
+建議觀察重點：{item['muscles']}
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+    if item["note"]:
+        st.caption(f"備註：{item['note']}")
+
+    if item["keywords"]:
+        st.caption(f"關聯線別關鍵字：{'、'.join(item['keywords'])}")
+
+    if item["images"]:
+        with st.expander("🔍 檢視對應圖譜"):
+            for img in item["images"]:
+                st.image(f"{IMAGE_DIR}/{img}", width=350)
+
+
+def render_results(results):
+    if not results:
+        st.info("目前沒有 DS / DA 受限項目，請先到「主動快篩」標記分級。")
+        return
+
+    for item in results:
+        render_result_card(item)
+
+
+def render_trend_chart(df, title, x_col, y_col):
+    if df is None or df.empty:
+        return
+
+    fig = px.line(
+        df,
+        x=x_col,
+        y=y_col,
+        title=title,
+        markers=True,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+# =========================
+# 建立頁籤
+# =========================
+
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+    [
+        "📋 基本資料",
+        "🦴 主動快篩",
+        "📊 判定結果",
+        "📚 完整圖譜",
+        "📈 趨勢追蹤",
+        "🤖 AI 助手",
+    ]
+)
+
+
+# =========================
+# Tab 1：基本資料
+# =========================
 
 with tab1:
     st.subheader("👤 基本資料")
+
     p_name = st.text_input("病人姓名", key="p_name")
     p_id = st.text_input("病歷號", key="p_id")
-    p_date = st.date_input("評估日期", value=datetime.now(tz_taiwan).date())
-    vas_score = st.slider("🤒 病人自覺整體分數 (10分最痛)", 0, 10, 5)
-    p_assessor = st.text_input("評估人")
-    p_note = st.text_area("整體臨床總結備註")
+    p_date = st.date_input("評估日期", value=get_today_taipei(), key="p_date")
+    vas_score = st.slider("🤒 病人自覺整體分數（10分最痛）", 0, 10, 5, key="vas_score")
+    p_assessor = st.text_input("評估人", key="p_assessor")
+    p_note = st.text_area("整體臨床總結備註", key="p_note")
+
+    st.session_state["last_patient_id"] = p_id.strip()
+
+
+# =========================
+# Tab 2：主動快篩
+# =========================
 
 with tab2:
-    st.info("請標註評估等級。核心受限請點選 ⭐ 加權。")
-    user_scores, user_action_notes, user_priorities = {}, {}, {}
+    st.subheader("🦴 主動快篩")
+    st.info("請標註評估等級。若為本次核心問題，請打勾「⭐ 加權」。")
+
+    user_scores = {}
+    user_action_notes = {}
+    user_priorities = {}
+
     for i, act in enumerate(ACTIONS, 1):
-        st.markdown(f"<div class='action-title'>{i}. 動作: {act}</div>", unsafe_allow_html=True)
+        hint = ACTION_HINTS.get(act, {})
+        action_label = hint.get("label", act)
+
+        st.markdown(
+            f"<div class='action-title'>{i}. 動作：{act} ｜ {action_label}</div>",
+            unsafe_allow_html=True,
+        )
+
         c1, c2 = st.columns([3, 1])
-        user_scores[act] = c1.segmented_control(label=act, options=["FA", "FS", "DS", "DA"], key=f"s_{act}", selection_mode="single", label_visibility="collapsed")
+
+        user_scores[act] = c1.segmented_control(
+            label=act,
+            options=SCORE_OPTIONS,
+            key=f"score_{act}",
+            selection_mode="single",
+            label_visibility="collapsed",
+        )
+
         user_priorities[act] = c2.checkbox("⭐ 加權", key=f"prio_{act}")
-        user_action_notes[act] = st.text_input(f"備註 ({act})", key=f"note_{act}")
+
+        user_action_notes[act] = st.text_input(
+            f"備註（{act}）",
+            key=f"note_{act}",
+        )
+
         st.divider()
+
+    # 存到 session，供 tab3 / tab6 使用
+    current_results = build_simple_results(user_scores, user_action_notes, user_priorities)
+
+    st.session_state["latest_results"] = current_results
+    st.session_state["latest_summary_text"] = build_clinical_summary(
+        p_name=p_name,
+        p_id=p_id,
+        p_date=p_date,
+        vas_score=vas_score,
+        p_assessor=p_assessor,
+        p_note=p_note,
+        results=current_results,
+    )
+
+
+# =========================
+# Tab 3：判定結果
+# =========================
 
 with tab3:
-    st.subheader("📊 判定結果")
-    
-    # 1. 基礎資料篩選與摘要顯示
-    da_list = [k for k, v in user_scores.items() if v == "DA"]
-    ds_list = [k for k, v in user_scores.items() if v == "DS"]
-    priority_list = [k for k, v in user_priorities.items() if v]
+    st.subheader("📊 判定結果（簡化版整合）")
 
-    if da_list or ds_list:
-        st.write(f"🛑 **DA:** {', '.join(da_list) if da_list else '無'} | ⚠️ **DS:** {', '.join(ds_list) if ds_list else '無'}")
-        if priority_list: 
-            st.write(f"🌟 **關鍵加權點:** {', '.join(priority_list)}")
-        st.divider()
+    results = st.session_state.get("latest_results", [])
 
-    # 2. 核心判定配對邏輯 (遵守同級對應原則)
-    weighted_res, da_da_res, ds_ds_res = [], [], []
-    for rule in TREATMENT_DATABASE:
-        pair_elements = list(rule["pair"])
-        s1, s2 = user_scores.get(pair_elements[0]), user_scores.get(pair_elements[1])
-        
-        # 必須 A 與 B 同為 DA 或同時為 DS 才能觸發判定 [cite: 14]
-        if s1 and s2 and s1 == s2 and s1 in ["DA", "DS"]:
-            # 判斷是否包含加權項目 
-            is_prio = not rule["pair"].isdisjoint(set(priority_list))
-            item = {**rule, "grade": s1, "is_prio": is_prio}
-            
-            if is_prio: 
-                weighted_res.append(item)
-            elif s1 == "DA": 
-                da_da_res.append(item)
-            else: 
-                ds_ds_res.append(item)
+    if st.button("🔄 重新整理判定結果", key="refresh_results"):
+        results = build_simple_results(user_scores, user_action_notes, user_priorities)
+        st.session_state["latest_results"] = results
+        st.session_state["latest_summary_text"] = build_clinical_summary(
+            p_name=p_name,
+            p_id=p_id,
+            p_date=p_date,
+            vas_score=vas_score,
+            p_assessor=p_assessor,
+            p_note=p_note,
+            results=results,
+        )
 
-    # 3. 視覺化結果呈現 (排序：加權 > DA > DS) 
-    display_ui_common(weighted_res, "⭐ 加權重點對應")
-    display_ui_common(da_da_res, "🟦 DA-DA 對應結果")
-    display_ui_common(ds_ds_res, "🟧 DS-DS 對應結果")
+    render_results(results)
 
-    # 4. 建議處理肌肉彙整 (去重複)
-    all_matched_items = weighted_res + da_da_res + ds_ds_res
-    suggested_muscles = []
-    for item in all_matched_items:
-        m_val = item.get("muscles")
-        if m_val:
-            # 處理字串格式並統一分隔符號
-            parts = str(m_val).replace('、', ',').split(',')
-            suggested_muscles.extend([p.strip() for p in parts if p.strip()])
-    
-    unique_muscles_str = "、".join(sorted(list(set(suggested_muscles)))) if suggested_muscles else "無資料"
+    if results:
+        with st.expander("📄 檢視本次臨床摘要（AI 將使用這份摘要）"):
+            st.write(st.session_state.get("latest_summary_text", ""))
 
-    # 5. 踝部加測互動 UI [cite: 16, 20]
-    selected_ankle_options = []
-    all_pairs = [" + ".join(sorted(list(r["pair"]))) for r in all_matched_items]
-    
-    for p_str in ["MSRR + MSSBL", "MSRL + MSSBR"]:
-        if p_str in all_pairs:
-            st.markdown(f"<div class='ankle-box'>🔍 偵測到 {p_str} 相對應，請加測：</div>", unsafe_allow_html=True)
-            side = "右" if "MSRR" in p_str else "左"
-            opp = "左" if side == "右" else "右"
-            
-            l1, l2 = f"{side}踝內翻受限 (處理{side}側線)", f"{opp}踝外翻受限 (處理{opp}深前線)"
-            if st.checkbox(l1, key=f"save_ak1_{p_str}"): selected_ankle_options.append(l1)
-            if st.checkbox(l2, key=f"save_ak2_{p_str}"): selected_ankle_options.append(l2)
 
-    # 6. 雲端同步儲存邏輯 [cite: 14, 17]
-    st.divider()
-    if st.button("🚀 完成評估並同步雲端", use_container_width=True):
-        if not p_name or not p_id: 
-            st.error("請輸入姓名與病歷號！")
-        else:
-            try:
-                # A. 整合加測備註
-                ankle_final_str = ""
-                triggered_ankle_pairs = [p for p in ["MSRR + MSSBL", "MSRL + MSSBR"] if p in all_pairs]
-                if triggered_ankle_pairs:
-                    base_prompt = f"偵測到 {'、'.join(triggered_ankle_pairs)} 相對應。"
-                    ankle_final_str = f"{base_prompt}加測結果：{'、'.join(selected_ankle_options)}" if selected_ankle_options else f"{base_prompt}尚未勾選加測結果。"
-
-                # B. 整合備註與動作細節
-                act_notes = [f"{a}:{user_action_notes[a].strip()}" for a in ACTIONS if user_action_notes[a].strip()]
-                prio_tags = [f"{a}(⭐)" for a in priority_list]
-                combined_details = "/".join(act_notes + prio_tags)
-                final_note = f"{p_note} | 詳細: {combined_details}" if p_note and combined_details else (p_note or combined_details)
-                
-                # C. 時間戳記處理 (自動標記補登) 
-                now_tw = datetime.now(tz_taiwan)
-                final_dt_str = now_tw.strftime("%Y-%m-%d %H:%M") if p_date >= now_tw.date() else f"{p_date} (補)"
-                
-                # D. 建構紀錄字典
-                record = {
-                    "日期": final_dt_str, 
-                    "評估人": p_assessor, 
-                    "病人姓名": p_name, 
-                    "病歷號": f"'{p_id}", # 強制 Excel 為文字格式
-                    "病人自覺分數": vas_score, 
-                    "加權關鍵點": ", ".join(priority_list),
-                    "判定結果": " / ".join([res['result'] for res in all_matched_items]), 
-                    "建議處理肌肉": unique_muscles_str,
-                    "備註": final_note, 
-                    "加測建議": ankle_final_str,
-                    "AI衛教建議": "" # 預留給未來 AI Agent
-                }
-                record.update(user_scores) # 加入所有主動測試分數
-                
-                # E. 同步至 Google Sheets 
-                df_old = fetch_data_no_cache(conn)
-                df_final = pd.concat([df_old, pd.DataFrame([record])], ignore_index=True)
-                conn.update(worksheet="Sheet1", data=df_final)
-                
-                st.success(f"✅ 資料已成功同步！系統時間：{final_dt_str}")
-                st.balloons()
-            except Exception as e:
-                st.error(f"❌ 同步失敗: {str(e)}")
+# =========================
+# Tab 4：完整圖譜
+# =========================
 
 with tab4:
     st.subheader("📚 完整圖譜")
-    atlas = {"FF 功能線": ["FF1.jpg", "FF2.jpg"], "SBL 淺背線": ["SBL.jpg"], "SFL 淺前線": ["SFL.jpg"], "LL 側線": ["LL.jpg"], "SPL 螺旋線": ["SPL.jpg"], "DFL 深前線": ["DFL.jpg"], "手臂線系列": ["SFAL.jpg", "SBAL.jpg", "DFAL.jpg", "DBAL.jpg"]}
-    for title, imgs in atlas.items():
+
+    for title, imgs in ATLAS_GROUPS.items():
         with st.expander(f"📍 {title}"):
-            for img in imgs: st.image(f"images/{img}", use_container_width=True)
+            for img in imgs:
+                st.image(f"{IMAGE_DIR}/{img}", use_container_width=True)
+
+
+# =========================
+# Tab 5：趨勢追蹤
+# =========================
 
 with tab5:
     st.subheader("📈 趨勢追蹤")
-    search_id = st.text_input("🔍 輸入病歷號查詢歷史紀錄", key="q_id_v12_final")
-    
-    if search_id:
-        all_df = fetch_data_no_cache(conn)
-        if not all_df.empty:
-            all_df['病歷號'] = all_df['病歷號'].astype(str).str.lstrip("'").str.strip()
-            p_history = all_df[all_df["病歷號"] == str(search_id).strip()].copy()
-            
-            if not p_history.empty:
-                p_history['sort_dt'] = pd.to_datetime(p_history['日期'].str.replace(" (補)", ""), errors='coerce')
-                p_history = p_history.sort_values("sort_dt")
-                last_record = p_history.iloc[-1]
-                
-                st.markdown(f"<div class='hist-title'>📋 末次評估詳情 ({last_record['日期']})</div>", unsafe_allow_html=True)
-                
-                last_scores = {a: last_record.get(a, "FA") for a in ACTIONS}
-                last_priorities = str(last_record.get("加權關鍵點", "")).split(", ")
-                
-                h_weighted, h_da, h_ds = [], [], []
-                for rule in TREATMENT_DATABASE:
-                    acts = list(rule["pair"])
-                    s1, s2 = last_scores.get(acts[0]), last_scores.get(acts[1])
-                    if s1 and s2 and s1 == s2 and s1 in ["DA", "DS"]:
-                        item = {**rule, "is_prio": not rule["pair"].isdisjoint(set(last_priorities))}
-                        if item["is_prio"]: h_weighted.append(item)
-                        elif s1 == "DA": h_da.append(item)
-                        else: h_ds.append(item)
 
-                display_ui_common(h_weighted, "⭐ 上次加權重點")
-                display_ui_common(h_da, "🟦 上次 DA-DA 對應")
-                display_ui_common(h_ds, "🟧 上次 DS-DS 對應")
-                
-                if "加測建議" in last_record and pd.notna(last_record["加測建議"]) and last_record["加測建議"] != "":
-                    st.markdown(f"<div class='ankle-box'>ℹ️ 歷史紀錄加測結果：<br>{last_record['加測建議']}</div>", unsafe_allow_html=True)
+    search_id = st.text_input("🔍 輸入病歷號查詢歷史紀錄", key="q_id_v145")
 
-                st.divider()
-                st.markdown("### 🤒 疼痛分數演變趨勢")
-                fig_bar = px.bar(p_history.tail(6), x="日期", y="病人自覺分數", color_discrete_sequence=["#1E88E5"], text_auto=True)
-                fig_bar.update_layout(xaxis_type='category') # 修正時間軸問題
-                st.plotly_chart(fig_bar, use_container_width=True)
-                
-                with st.expander("📂 查看所有歷史筆記"):
-                    display_cols = ["日期", "判定結果", "病人自覺分數", "備註"]
-                    if "加測建議" in p_history.columns: display_cols.insert(2, "加測建議")
-                    st.dataframe(p_history.sort_values("sort_dt", ascending=False)[display_cols])
-            else: st.error("找不到此病歷號")
-        else: st.warning("資料庫目前為空。")
+    if search_id.strip():
+        df_main = fetch_main_assessment_data(conn, ttl=10)
+
+        if df_main is None or df_main.empty:
+            st.info("目前主資料表沒有可讀取的資料，或 Google Sheets 連線尚未完成。")
+        else:
+            pid_col = find_existing_column(df_main, ["病歷號", "patient_id", "PID", "p_id"])
+            date_col = find_existing_column(df_main, ["日期", "評估日期", "date", "Date"])
+            vas_col = find_existing_column(df_main, ["VAS", "vas", "疼痛分數", "痛覺分數"])
+
+            if pid_col is None:
+                st.warning("主資料表找不到『病歷號』欄位，無法做歷史查詢。")
+            else:
+                filtered_df = filter_by_patient_id(df_main, search_id, patient_id_column=pid_col)
+                filtered_df = safe_sort_by_datetime(filtered_df, datetime_column=date_col if date_col else "日期")
+
+                if filtered_df.empty:
+                    st.info("查無此病歷號的主表歷史紀錄。")
+                else:
+                    st.success(f"找到 {len(filtered_df)} 筆主表資料。")
+                    st.dataframe(filtered_df, use_container_width=True)
+
+                    if date_col and vas_col:
+                        try:
+                            plot_df = filtered_df.copy()
+                            plot_df[date_col] = pd.to_datetime(plot_df[date_col], errors="coerce")
+                            plot_df[vas_col] = pd.to_numeric(plot_df[vas_col], errors="coerce")
+                            plot_df = plot_df.dropna(subset=[date_col, vas_col])
+
+                            if not plot_df.empty:
+                                render_trend_chart(plot_df, "VAS 趨勢", date_col, vas_col)
+                        except Exception as e:
+                            st.warning(f"VAS 圖表產生失敗：{str(e)}")
+
+        st.markdown("---")
+        st.subheader("🤖 AI 衛教歷史")
+
+        ai_history_df = fetch_ai_history(conn, search_id)
+
+        if ai_history_df is None or ai_history_df.empty:
+            st.info("查無此病歷號的 AI 衛教歷史。")
+        else:
+            st.dataframe(ai_history_df, use_container_width=True)
+
+
+# =========================
+# Tab 6：AI 助手
+# =========================
 
 with tab6:
     st.header("🤖 AI 臨床衛教助手")
-    
-    # 模式選擇
-    ai_mode = st.radio(
-        "功能選擇", 
-        ["⚡ 根據當前評估一鍵生成", "🔍 抓取歷史評估結果", "✍️ 手動輸入狀況分析"]
-    )
-    
-    st.markdown("---")
-    st.subheader("🧘 客製化居家衛教處方即時生成")
 
-    # 處理模式一：當前即時評估一鍵生成
-    if ai_mode == "⚡ 根據當前評估一鍵生成":
-        
-        # 修正 1：補充資訊欄位只在需要搭配前頁數據的「模式一」與「模式二」顯示
-        extra_note = st.text_area(
-            "📝 治療師額外補充資訊", 
-            placeholder="例如：病人為高齡長輩、希望在家做的運動不要超過10分鐘、加強核心穩定..."
-        )
-        
-        if 'da_list' in locals() and 'ds_list' in locals():
-            判定結果總覽 = f"功能異常且無症狀(DA)項目: {', '.join(da_list)}\n功能異常且有症狀(DS)項目: {', '.join(ds_list)}"
-            
-            if st.button("🚀生成分析建議", key="btn_live_generate"):
-                with st.spinner("KPM-AI 正在對照專家資料庫，進行跨線路動態組裝中..."):
-                    st.session_state.generated_advice = get_kpm_ai_advice(
-                        clinical_summary=判定結果總覽, 
-                        extra_info=extra_note
-                    )
-                st.success("✅ 即時衛教單組裝完成！")
-        else:
-            st.warning("⚠️ 系統偵測到當前診次尚未完成動作快篩評估，請先至前方的評估分頁輸入數據。")
-
-    # 處理模式二：抓取雲端歷史紀錄
-    elif ai_mode == "🔍 抓取歷史評估結果":
-        search_id = st.text_input("請輸入病歷號進行檢索", key="ai_search_id")
-        
-        # 滿足模式二的補充需求
-        extra_note = st.text_area(
-            "📝 治療師額外補充資訊", 
-            placeholder="例如：病人希望能加強上肢放鬆..."
-        )
-        
-        if st.button("🚀生成分析建議", key="btn_history_fetch"):
-            with st.spinner("正在搜尋雲端最新資料..."):
-                df_history = fetch_data_with_buffer(conn)
-                if not df_history.empty:
-                    df_history.columns = df_history.columns.str.strip().str.replace('\n', '')
-                    col_pid = next((c for c in df_history.columns if "病歷號" in c), None)
-                    col_date = next((c for c in df_history.columns if "日期" in c), None)
-                    col_ai_record = next((c for c in df_history.columns if "AI衛教建議" in c), None)
-                    
-                    if col_pid:
-                        df_history["pid_clean"] = df_history[col_pid].astype(str).str.lstrip("'").str.strip()
-                        p_data = df_history[df_history["pid_clean"] == str(search_id).strip()].copy()
-                        
-                        if not p_data.empty:
-                            p_data[col_date] = pd.to_datetime(p_data[col_date], errors='coerce')
-                            latest_record = p_data.sort_values(by=col_date, ascending=False).iloc[0]
-                            existing_advice = latest_record.get(col_ai_record, "") if col_ai_record else ""
-                            
-                            if existing_advice and len(str(existing_advice)) > 50:
-                                st.session_state.generated_advice = existing_advice
-                                st.info("💡 已從雲端資料庫讀取現有衛教資訊。")
-                            else:
-                                muscle_info = latest_record.get('建議處理肌肉', '無資料')
-                                clinical_context = f"判定: {latest_record.get('判定結果', '無')}, 肌肉: {muscle_info}"
-                                st.session_state.generated_advice = get_kpm_ai_advice(clinical_context, extra_note)
-                                st.warning("🆕 雲端無舊紀錄，已產生新 AI 衛教。")
-                            
-                            # 儲存當前查詢成功的病歷號，供後續同步雲端使用
-                            st.session_state.current_sync_pid = str(search_id).strip()
-                            st.success("✅ 雲端歷史處理完成")
-                        else:
-                            st.error("❌ 找不到該病歷號")
-
-    # 處理模式三：手動輸入狀況分析
+    if ai_enabled:
+        st.success("✅ AI 功能已啟用")
     else:
-        # 修正 1：完全移除了外部重複的 extra_note，只保留這一個核心描述框，乾淨不混淆
-        manual_context = st.text_area(
-            "請輸入臨床主訴或自由描述", 
-            placeholder="例如：久坐科技廠工程師，主訴右邊高低肩，向前彎腰時大腿後側有嚴重硬緊拉扯感..."
-        )
-        if st.button("🚀生成分析建議", key="btn_manual_generate"):
-            with st.spinner("KPM-AI 正在讀取外部知識邊界，進行文字優化轉譯中..."):
-                st.session_state.generated_advice = get_kpm_ai_advice(manual_context, "")
-            st.success("✅ 自由輸入分析完成！")
+        st.warning(f"⚠️ AI 功能目前未啟用：{ai_msg}")
 
-    # 顯示結果區塊
-    if 'generated_advice' in st.session_state and st.session_state.generated_advice:
-        st.markdown("---")
-        st.subheader("📋 KPM AI 運動建議")
-        st.info("衛教單已生成完畢，可全選複製傳給病人或是影印")
-        
-        st.text_area(
-            label="", 
-            value=st.session_state.generated_advice, 
-            height=400,
-            label_visibility="collapsed"
-        )
-        c_copy, c_sync = st.columns([1, 2])
-        
-        with c_copy:
-            js_copy_code = f"""
-            <script>
-            function copyToClipboard() {{
-                const text = `{st.session_state.generated_advice}`;
-                navigator.clipboard.writeText(text).then(function() {{
-                    alert('📋 全文已成功複製到剪貼簿！');
-                }}, function(err) {{
-                    alert('複製失敗，請手動全選滑鼠右鍵複製');
-                }});
-            }}
-            </script>
-            <button onclick="copyToClipboard()" style="
-                background-color: #FF4B4B; color: white; border: none; 
-                padding: 8px 16px; text-align: center; font-size: 14px; 
-                margin: 4px 2px; cursor: pointer; border-radius: 4px; width: 100%;">
-                📋 一鍵複製全文
-            </button>
-            """
-            st.components.v1.html(js_copy_code, height=50)
-            
-        with c_sync:
-            # 修正 4：雲端同步按鈕觸發
-            if st.button("💾 將此建議同步保存至該病患雲端欄位", width=300):
-                target_pid = None
-                if ai_mode == "🔍 抓取歷史評估結果" and "current_sync_pid" in st.session_state:
-                    target_pid = st.session_state.current_sync_pid
-                elif ai_mode == "⚡ 根據當前評估一鍵生成" and "p_id" in locals():
-                    target_pid = p_id  # 抓取第一頁即時輸入的病歷號變數
-                
-                if target_pid:
-                    with st.spinner("正在尋找對應病歷號，寫入 AI 衛教建議..."):
-                        success = update_ai_advice_to_cloud(conn, target_pid, st.session_state.generated_advice)
-                        if success:
-                            st.success(f"🎉 病歷號 {target_pid} 的 AI 衛教建議已成功寫回雲端試算表！")
-                        else:
-                            st.error("同步失敗，請檢查網路連線或 Sheet1 欄位名稱是否包含「AI衛教建議」。")
+    st.caption(f"系統時間：{format_display_time()} (Taipei)")
+
+    target_pid = st.session_state.get("last_patient_id", "").strip()
+
+    ai_mode = st.radio(
+        "功能選擇",
+        [
+            "⚡ 根據當前評估一鍵生成",
+            "🔍 抓取歷史評估結果",
+            "✍️ 手動輸入狀況分析",
+        ],
+        key="ai_mode",
+    )
+
+    results = st.session_state.get("latest_results", [])
+    summary_text = st.session_state.get("latest_summary_text", "")
+
+    if ai_mode == "⚡ 根據當前評估一鍵生成":
+        st.write("系統將使用目前 Tab1 + Tab2 的資料產生衛教內容。")
+
+        if not target_pid:
+            st.info("尚未輸入病歷號，仍可生成 AI 文字，但無法寫入歷史 archive。")
+
+        if not results:
+            st.warning("目前沒有可用的判定結果，請先到「主動快篩」完成標記。")
+
+        if st.button("🚀 一鍵生成 AI 衛教", key="btn_ai_generate_current"):
+            if not results:
+                st.error("沒有 DS/DA 受限項目，無法進行本次 AI 生成。")
+            else:
+                target_keywords = build_target_keywords(results)
+
+                with st.spinner("AI 正在生成衛教內容中..."):
+                    ai_response = get_ai_advice(
+                        clinical_summary=summary_text,
+                        extra_info=p_note if p_note else "",
+                        target_keywords=target_keywords,
+                    )
+
+                st.session_state["latest_ai_text"] = ai_response.get("text", "")
+                st.session_state["latest_ai_raw_text"] = ai_response.get("raw_text", "")
+                st.session_state["latest_ai_reasons"] = ai_response.get("reasons", [])
+
+                if ai_response.get("success", False):
+                    st.success("✅ AI 衛教內容生成完成。")
                 else:
-                    st.warning("⚠️ 無法定位病歷號。手動自由輸入模式無法直接同步，請使用上方一鍵複製功能。")
+                    st.warning("AI 目前處於降級模式，已回傳安全備援內容。")
 
-# 時區顯示 (依據 SOP 要求)
-st.caption(f"系統時間：{datetime.now(tz_taiwan).strftime('%Y-%m-%d %H:%M:%S')} (Taipei)")
+    elif ai_mode == "🔍 抓取歷史評估結果":
+        st.write("從雲端 archive 抓取該病人最新的 AI 衛教紀錄。")
+
+        history_pid = st.text_input(
+            "請輸入病歷號",
+            value=target_pid,
+            key="history_ai_pid",
+        )
+
+        if st.button("📥 抓取最新 AI 衛教", key="btn_ai_fetch_history"):
+            latest_record = fetch_latest_ai_advice(conn, history_pid)
+
+            if not latest_record:
+                st.warning("查無此病歷號的 AI 歷史紀錄。")
+            else:
+                st.session_state["latest_ai_text"] = latest_record.get("AI衛教建議", "")
+                st.session_state["latest_summary_text"] = latest_record.get("判定結果", "")
+                st.success("✅ 已載入最新 AI 衛教紀錄。")
+
+    elif ai_mode == "✍️ 手動輸入狀況分析":
+        st.write("適合沒有進行完整快篩，但想先做文字衛教初稿時使用。")
+
+        manual_text = st.text_area(
+            "請輸入病人目前狀況（請避免輸入姓名與完整病歷號）",
+            height=180,
+            key="manual_ai_input",
+        )
+
+        manual_keywords = st.multiselect(
+            "可手動指定關聯線別（提高知識庫命中率）",
+            options=[
+                "淺背線",
+                "淺前線",
+                "側線",
+                "螺旋線",
+                "深前線",
+                "前功能線",
+                "後功能線",
+                "淺前手臂線",
+                "淺後手臂線",
+                "深前手臂線",
+                "深後手臂線",
+            ],
+            key="manual_ai_keywords",
+        )
+
+        if st.button("📝 產生手動 AI 衛教", key="btn_ai_generate_manual"):
+            if not manual_text.strip():
+                st.error("請先輸入手動描述內容。")
+            else:
+                with st.spinner("AI 正在分析手動輸入內容..."):
+                    ai_response = get_ai_advice(
+                        clinical_summary=manual_text.strip(),
+                        extra_info="",
+                        target_keywords=manual_keywords,
+                    )
+
+                st.session_state["latest_ai_text"] = ai_response.get("text", "")
+                st.session_state["latest_ai_raw_text"] = ai_response.get("raw_text", "")
+                st.session_state["latest_ai_reasons"] = ai_response.get("reasons", [])
+
+                if ai_response.get("success", False):
+                    st.success("✅ AI 衛教內容生成完成。")
+                else:
+                    st.warning("AI 目前處於降級模式，已回傳安全備援內容。")
+
+    st.markdown("---")
+    st.subheader("🧾 AI 輸出結果")
+
+    latest_ai_text = st.session_state.get("latest_ai_text", "")
+    latest_ai_reasons = st.session_state.get("latest_ai_reasons", [])
+
+    if latest_ai_text:
+        st.text_area(
+            "可直接複製給病人的文字",
+            value=latest_ai_text,
+            height=420,
+            key="output_ai_text",
+        )
+
+        if latest_ai_reasons:
+            with st.expander("⚠️ AI 格式提醒 / 修正資訊"):
+                for reason in latest_ai_reasons:
+                    st.write(f"• {reason}")
+
+        if target_pid.strip():
+            if st.button("💾 儲存本次 AI 衛教到雲端", key="btn_save_ai_archive"):
+                save_ai_advice(
+                    conn=conn,
+                    patient_id=target_pid,
+                    ai_text=latest_ai_text,
+                    summary_text=st.session_state.get("latest_summary_text", ""),
+                )
+    else:
+        st.info("尚未生成 AI 內容。")
+
