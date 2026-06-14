@@ -100,31 +100,70 @@ def fetch_ai_advice_from_archive(conn, patient_id):
     except:
         return None
 
-def update_ai_advice_to_cloud(conn, patient_id, ai_text, summary_text):
+def update_ai_advice_to_cloud(conn, patient_id, ai_text):
     """
-    將衛教資料存入 Sheet2，保持臨床評估表乾淨
+    KPM 終極抗誤差版：完全不更動 columns 數量，點對點精準寫回 AI 衛教文字
     """
     try:
-        # 1. 準備好要存入的新資料
-        new_row = pd.DataFrame([{
-            "病歷號": patient_id,
-            "日期": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "判定結果": summary_text,
-            "AI衛教建議": ai_text
-        }])
+        # 1. 抓取目前雲端最即時的完整資料表
+        df_all = conn.read(worksheet="Sheet1", ttl=0)
+        if df_all.empty:
+            return False
+            
+        # 修正核心：建立一個「乾淨的臨時對照清單」，但不直接覆蓋修改 df_all.columns
+        # 這樣就能完美避開 Expected 30 elements, new has 29 欄位數量不符的死結
+        clean_columns = [str(c).strip().replace('\n', '') for c in df_all.columns]
         
-        # 2. 讀取現有存檔庫
-        df_archive = conn.read(worksheet="AI_Education_Archive", ttl=0)
+        # 2. 用對照清單精準鎖定關鍵欄位的「實體正確名稱」
+        actual_pid_col = None
+        actual_date_col = None
+        actual_ai_col = None
         
-        # 3. 合併資料
-        df_updated = pd.concat([df_archive, new_row], ignore_index=True)
+        for idx, name in enumerate(clean_columns):
+            if "病歷號" in name:
+                actual_pid_col = df_all.columns[idx]
+            if "日期" in name:
+                actual_date_col = df_all.columns[idx]
+            if "AI衛教建議" in name:
+                actual_ai_col = df_all.columns[idx]
+                
+        # 3. 安全性檢查
+        if not actual_pid_col or not actual_ai_col:
+            st.error("❌ 同步失敗：雲端試算表第一行標題列，找不到「病歷號」或「AI衛教建議」欄位，請檢查字體是否完全一致。")
+            return False
+            
+        # 4. 尋找與當前病患相符的橫列 (Row)
+        # 先將病歷號欄位轉為文字並去除前後空白以精準比對
+        df_all["_temp_pid_match"] = df_all[actual_pid_col].astype(str).str.lstrip("'").str.strip()
+        matched_indices = df_all[df_all["_temp_pid_match"] == str(patient_id)].index
         
-        # 4. 寫回 Sheet2
-        conn.update(worksheet="AI_Education_Archive", data=df_updated)
+        if len(matched_indices) == 0:
+            st.error(f"❌ 雲端找不到病歷號 {patient_id} 的評估紀錄，無法同步。請確認前幾頁是否已成功寫入。")
+            # 移除臨時欄位
+            df_all = df_all.drop(columns=["_temp_pid_match"])
+            return False
+            
+        # 5. 如果有多筆歷史紀錄，透過日期排序找出最新的一筆 Row 索引
+        if actual_date_col:
+            df_matched = df_all.loc[matched_indices].copy()
+            df_matched[actual_date_col] = pd.to_datetime(df_matched[actual_date_col], errors='coerce')
+            target_index = df_matched.sort_values(by=actual_date_col, ascending=False).index[0]
+        else:
+            # 若無日期欄位，則預設鎖定相符的最後一列
+            target_index = matched_indices[-1]
+            
+        # 6. 精準定位，直接將 AI 建議文字填入該列的 AI衛教建議儲存格
+        df_all.at[target_index, actual_ai_col] = ai_text
+        
+        # 7. 移除清洗用的臨時欄位，一鍵完整覆寫回 Google Sheets
+        df_all = df_all.drop(columns=["_temp_pid_match"])
+            
+        conn.update(worksheet="Sheet1", data=df_all)
         return True
+        
     except Exception as e:
-        st.error(f"雲端存檔失敗: {e}")
-        return False    
+        st.error(f"雲端寫入時發生未預期錯誤: {str(e)}")
+        return False
 
 
 def fetch_data_with_buffer(conn):
@@ -167,7 +206,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🩺 KPM 關鍵點評估系統 V1.4.4")
+st.title("🩺 KPM 關鍵點評估系統 V1.4.8")
 
 # --- 2. 核心資料定義 --- [cite: 50-67, 81-83]
 ACTIONS = ["CF", "CE", "CRR", "CRL", "CR", "RAU", "RAD", "LAU", "LAD", "MSF", "MSE", "MSRR", "MSRL", "MSSBR", "MSSBL", "CADS"]
@@ -676,14 +715,23 @@ with tab6:
             st.components.v1.html(js_copy_code, height=50)
             
         with c_sync:
-            # 雲端同步按鈕
-            # 在您的 Tab 6 同步按鈕區塊
-            if st.button("💾 將此建議同步保存至該病患雲端欄位"):
-                # 這裡的 '判定結果總覽' 變數在程式中要記得保留傳遞
-                if update_ai_advice_to_cloud(conn, target_pid, st.session_state.generated_advice, 判定結果總覽):
-                    st.success("🎉 衛教建議已歸檔至雲端存檔庫 (Sheet2)！")
+            # 修正 4：雲端同步按鈕觸發
+            if st.button("💾 將此建議同步保存至該病患雲端欄位", width=300):
+                target_pid = None
+                if ai_mode == "🔍 抓取歷史評估結果" and "current_sync_pid" in st.session_state:
+                    target_pid = st.session_state.current_sync_pid
+                elif ai_mode == "⚡ 根據當前評估一鍵生成" and "p_id" in locals():
+                    target_pid = p_id  # 抓取第一頁即時輸入的病歷號變數
+                
+                if target_pid:
+                    with st.spinner("正在尋找對應病歷號，寫入 AI 衛教建議..."):
+                        success = update_ai_advice_to_cloud(conn, target_pid, st.session_state.generated_advice)
+                        if success:
+                            st.success(f"🎉 病歷號 {target_pid} 的 AI 衛教建議已成功寫回雲端試算表！")
+                        else:
+                            st.error("同步失敗，請檢查網路連線或 Sheet1 欄位名稱是否包含「AI衛教建議」。")
                 else:
-                    st.error("同步失敗，請檢查網路連線。")
+                    st.warning("⚠️ 無法定位病歷號。手動自由輸入模式無法直接同步，請使用上方一鍵複製功能。")
 
 # 時區顯示 (依據 SOP 要求)
 st.caption(f"系統時間：{datetime.now(tz_taiwan).strftime('%Y-%m-%d %H:%M:%S')} (Taipei)")
