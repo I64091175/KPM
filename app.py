@@ -455,44 +455,144 @@ with tab2:
 # Tab 3：判定結果
 # =========================
 
+from datetime import datetime
+
 with tab3:
     st.subheader("📊 判定結果")
+    
+    # ✅ 1. 基礎資料篩選
+    da_list = [k for k, v in user_scores.items() if v == "DA"]
+    ds_list = [k for k, v in user_scores.items() if v == "DS"]
+    priority_list = [k for k, v in user_priorities.items() if v]
 
-    results = st.session_state.get("latest_results", [])
+    if da_list or ds_list:
+        st.write(f"🛑 **DA:** {', '.join(da_list) if da_list else '無'} | ⚠️ **DS:** {', '.join(ds_list) if ds_list else '無'}")
+        if priority_list:
+            st.write(f"🌟 **關鍵加權點:** {', '.join(priority_list)}")
+        st.divider()
 
-    if not results:
-        st.info("尚無判定結果，請先完成主動快篩。")
-    else:
-        for r in results:
-            prefix = "⭐" if r["is_prio"] else ""
-            st.write(
-                f"{prefix}{r['action']}（{r['score']}｜{r['depth']}）"
+    # ✅ 2. 核心判定邏輯（完全保留）
+    weighted_res, da_da_res, ds_ds_res = [], [], []
+
+    for rule in TREATMENT_DATABASE:
+        pair_elements = list(rule["pair"])
+        s1, s2 = user_scores.get(pair_elements[0]), user_scores.get(pair_elements[1])
+
+        if s1 and s2 and s1 == s2 and s1 in ["DA", "DS"]:
+            is_prio = not rule["pair"].isdisjoint(set(priority_list))
+            item = {**rule, "grade": s1, "is_prio": is_prio}
+
+            if is_prio:
+                weighted_res.append(item)
+            elif s1 == "DA":
+                da_da_res.append(item)
+            else:
+                ds_ds_res.append(item)
+
+    # ✅ 3. UI 顯示（完全保留 V1.4.5）
+    display_ui_common(weighted_res, "⭐ 加權重點對應")
+    display_ui_common(da_da_res, "🟦 DA-DA 對應結果")
+    display_ui_common(ds_ds_res, "🟧 DS-DS 對應結果")
+
+
+    # ✅ 4. 建議肌肉整理（不動）
+    all_matched_items = weighted_res + da_da_res + ds_ds_res
+
+    suggested_muscles = []
+    for item in all_matched_items:
+        m_val = item.get("muscles")
+        if m_val:
+            parts = str(m_val).replace('、', ',').split(',')
+            suggested_muscles.extend([p.strip() for p in parts if p.strip()])
+
+    unique_muscles_str = (
+        "、".join(sorted(list(set(suggested_muscles))))
+        if suggested_muscles else "無資料"
+    )
+
+
+    # ✅ 5. 踝部加測（修正 HTML）
+    selected_ankle_options = []
+    all_pairs = [" + ".join(sorted(list(r["pair"]))) for r in all_matched_items]
+
+    for p_str in ["MSRR + MSSBL", "MSRL + MSSBR"]:
+        if p_str in all_pairs:
+            st.markdown(
+                f"<div class='ankle-box'>🔍 偵測到 {p_str} 相對應，請加測：</div>",
+                unsafe_allow_html=True
             )
 
-            if r["note"]:
-                st.caption(f"備註：{r['note']}")
+            side = "右" if "MSRR" in p_str else "左"
+            opp = "左" if side == "右" else "右"
 
-    if results:
-        with st.expander("📄 本次臨床摘要"):
-            st.write(st.session_state.get("latest_summary_text", ""))
+            l1 = f"{side}踝內翻受限 (處理{side}側線)"
+            l2 = f"{opp}踝外翻受限 (處理{opp}深前線)"
 
-if results and st.button("💾 上傳本次評估結果至雲端"):
-    if not p_id:
-        st.warning("請先輸入病歷號")
-    else:
-        try:
-            df_to_save = pd.DataFrame([{
-                "病歷號": p_id,
-                "評估日期": p_date,
-                "VAS": vas_score,
-                "評估人": p_assessor,
-                "判定摘要": st.session_state.get("latest_summary_text", "")
-            }])
+            if st.checkbox(l1, key=f"save_ak1_{p_str}"):
+                selected_ankle_options.append(l1)
 
-            conn.write(df_to_save, worksheet="Sheet1")
-            st.success("✅ 已成功上傳雲端")
-        except Exception as e:
-            st.error(f"上傳失敗：{str(e)}")
+            if st.checkbox(l2, key=f"save_ak2_{p_str}"):
+                selected_ankle_options.append(l2)
+
+
+    # ✅ 6. 雲端同步（修為 data_service 架構）
+    st.divider()
+
+    if st.button("🚀 完成評估並同步雲端", use_container_width=True):
+        if not p_name or not p_id:
+            st.error("請輸入姓名與病歷號！")
+        else:
+            try:
+                now_tw = datetime.now()
+
+                # A. 加測結果
+                ankle_final_str = ""
+                triggered_pairs = [p for p in ["MSRR + MSSBL", "MSRL + MSSBR"] if p in all_pairs]
+
+                if triggered_pairs:
+                    base_prompt = f"偵測到 {'、'.join(triggered_pairs)} 相對應。"
+                    ankle_final_str = (
+                        f"{base_prompt}加測結果：{'、'.join(selected_ankle_options)}"
+                        if selected_ankle_options
+                        else f"{base_prompt}尚未勾選加測結果。"
+                    )
+
+                # B. 細節整合
+                act_notes = [f"{a}:{user_action_notes[a].strip()}" for a in ACTIONS if user_action_notes[a].strip()]
+                prio_tags = [f"{a}(⭐)" for a in priority_list]
+
+                combined_details = "/".join(act_notes + prio_tags)
+                final_note = f"{p_note} | 詳細: {combined_details}" if p_note and combined_details else (p_note or combined_details)
+
+                final_dt_str = now_tw.strftime("%Y-%m-%d %H:%M")
+
+                record = {
+                    "日期": final_dt_str,
+                    "評估人": p_assessor,
+                    "病人姓名": p_name,
+                    "病歷號": f"'{p_id}",
+                    "病人自覺分數": vas_score,
+                    "加權關鍵點": ", ".join(priority_list),
+                    "判定結果": " / ".join([res['result'] for res in all_matched_items]),
+                    "建議處理肌肉": unique_muscles_str,
+                    "備註": final_note,
+                    "加測建議": ankle_final_str,
+                    "AI衛教建議": ""
+                }
+
+                record.update(user_scores)
+
+                # ✅ 用 data_service
+                from services.data_service import append_row
+                import pandas as pd
+
+                append_row(conn, "Sheet1", pd.DataFrame([record]))
+
+                st.success(f"✅ 資料已成功同步！時間：{final_dt_str}")
+                st.balloons()
+
+            except Exception as e:
+                st.error(f"❌ 同步失敗: {str(e)}")
 # =========================
 # Tab 4：完整圖譜
 # =========================
