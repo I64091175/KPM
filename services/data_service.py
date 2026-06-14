@@ -44,7 +44,7 @@ def fetch_sheet(conn, worksheet_name, ttl=10):
         return df
 
     except Exception as e:
-        handle_gsheets_error(e)
+        st.error(f"讀取 Google Sheets 失敗：{str(e)}")
         return pd.DataFrame()
 
 
@@ -127,7 +127,7 @@ def append_row(conn, worksheet_name, row_df):
         return True
 
     except Exception as e:
-        handle_gsheets_error(e)
+        st.error(f"讀取 Google Sheets 失敗：{str(e)}")        
         return False
 
 
@@ -147,7 +147,7 @@ def write_dataframe(conn, worksheet_name, df):
         conn.update(worksheet=worksheet_name, data=df)
         return True
     except Exception as e:
-        handle_gsheets_error(e)
+        st.error(f"讀取 Google Sheets 失敗：{str(e)}")        
         return False
 
 

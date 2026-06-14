@@ -25,11 +25,12 @@ from services.archive_service import (
 )
 from services.ai_service import get_ai_advice
 
+
 # =========================
 # 基本設定與初始化
 # =========================
 
-st.set_page_config(page_title="KPM 筋膜評估系統", layout="centered")
+st.set_page_config(page_title="KPM 筋膜評估系統測試版", layout="centered")
 
 apply_custom_css()
 ai_enabled, ai_msg = configure_gemini()
