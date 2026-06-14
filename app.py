@@ -512,10 +512,10 @@ with tab6:
     )
     
     st.markdown("---")
-    
+    st.subheader("🧘 客製化居家衛教處方即時生成")
+
     # 處理模式一：當前即時評估一鍵生成
     if ai_mode == "⚡ 根據當前評估一鍵生成":
-        st.subheader("🧘 客製化居家衛教處方即時生成")
         
         # 修正 1：補充資訊欄位只在需要搭配前頁數據的「模式一」與「模式二」顯示
         extra_note = st.text_area(
