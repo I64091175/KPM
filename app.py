@@ -95,10 +95,10 @@ ACTION_HINTS = {
         "muscles": "左側頸部、上斜方與胸鎖乳突區域需再確認",
     },
     "CR": {
-        "label": "頸部側屈",
+        "label": "CR",
         "depth": "淺層",
-        "keywords": ["側線"],
-        "muscles": "頸側壁、提肩胛與肩頸外側張力需再確認",
+        "keywords": [],
+        "muscles": "由治療師依 CRR / CRL 判斷",
     },
     "RAU": {
         "label": "右上肢上舉",
@@ -211,6 +211,18 @@ def build_simple_results(user_scores, user_action_notes, user_priorities):
             },
         )
 
+        # ✅ CR 特別處理（依 CRR / CRL）
+        if act == "CR":
+            if user_scores.get("CRR") in ["DS", "DA"]:
+                hint["keywords"] = ["側線", "螺旋線"]
+            elif user_scores.get("CRL") in ["DS", "DA"]:
+                hint["keywords"] = ["側線", "螺旋線"]
+            else:
+                hint["keywords"] = []
+
+
+
+
         note = user_action_notes.get(act, "").strip()
         is_prio = user_priorities.get(act, False)
 
@@ -307,7 +319,7 @@ def render_result_card(item):
     st.markdown(
         f"""
 <div class="{ 'priority-box' if item['is_prio'] else ('superficial-box' if item['depth']=='淺層' else 'deep-box') }">
-{title_prefix} <b>{item['action']}｜{item['label']}</b><br>
+{title_prefix} <b>{item['action']}</b><br>
 分級：{item['score']}<br>
 層級：{item['depth']}<br>
 建議觀察重點：{item['muscles']}
@@ -401,7 +413,7 @@ with tab2:
         action_label = hint.get("label", act)
 
         st.markdown(
-            f"<div class='action-title'>{i}. 動作：{act} ｜ {action_label}</div>",
+            f"<div class='action-title'>{i}. 動作：{act} </div>",
             unsafe_allow_html=True,
         )
 
@@ -444,30 +456,43 @@ with tab2:
 # =========================
 
 with tab3:
-    st.subheader("📊 判定結果（簡化版整合）")
+    st.subheader("📊 判定結果")
 
     results = st.session_state.get("latest_results", [])
 
-    if st.button("🔄 重新整理判定結果", key="refresh_results"):
-        results = build_simple_results(user_scores, user_action_notes, user_priorities)
-        st.session_state["latest_results"] = results
-        st.session_state["latest_summary_text"] = build_clinical_summary(
-            p_name=p_name,
-            p_id=p_id,
-            p_date=p_date,
-            vas_score=vas_score,
-            p_assessor=p_assessor,
-            p_note=p_note,
-            results=results,
-        )
+    if not results:
+        st.info("尚無判定結果，請先完成主動快篩。")
+    else:
+        for r in results:
+            prefix = "⭐" if r["is_prio"] else ""
+            st.write(
+                f"{prefix}{r['action']}（{r['score']}｜{r['depth']}）"
+            )
 
-    render_results(results)
+            if r["note"]:
+                st.caption(f"備註：{r['note']}")
 
     if results:
-        with st.expander("📄 檢視本次臨床摘要（AI 將使用這份摘要）"):
+        with st.expander("📄 本次臨床摘要"):
             st.write(st.session_state.get("latest_summary_text", ""))
 
+if results and st.button("💾 上傳本次評估結果至雲端"):
+    if not p_id:
+        st.warning("請先輸入病歷號")
+    else:
+        try:
+            df_to_save = pd.DataFrame([{
+                "病歷號": p_id,
+                "評估日期": p_date,
+                "VAS": vas_score,
+                "評估人": p_assessor,
+                "判定摘要": st.session_state.get("latest_summary_text", "")
+            }])
 
+            conn.write(df_to_save, worksheet="Sheet1")
+            st.success("✅ 已成功上傳雲端")
+        except Exception as e:
+            st.error(f"上傳失敗：{str(e)}")
 # =========================
 # Tab 4：完整圖譜
 # =========================
