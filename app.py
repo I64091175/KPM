@@ -596,63 +596,49 @@ with tab6:
         else:
             st.warning("⚠️ 系統偵測到當前診次尚未完成動作快篩評估，請先至前方的評估分頁輸入數據。")
 
-    # 處理模式二：抓取雲端歷史紀錄
 # 處理模式二：抓取雲端歷史紀錄
     elif ai_mode == "🔍 抓取歷史評估結果":
-        search_id = st.text_input("請輸入病歷號進行檢索 (如：002)", key="ai_search_id")
+        search_id = st.text_input("請輸入病歷號進行檢索", key="ai_search_id")
         
-        # 額外補充資訊
-        extra_note = st.text_area(
-            "📝 治療師額外補充資訊", 
-            placeholder="例如：病人希望能加強上肢放鬆..."
-        )
-        
-        if st.button("🚀 生成分析建議", key="btn_history_fetch"):
+        if st.button("🚀生成分析建議", key="btn_history_fetch"):
             with st.spinner("正在搜尋雲端最新資料..."):
                 df_history = fetch_data_with_buffer(conn)
                 
                 if not df_history.empty:
-                    # 1. 統一標題格式
                     df_history.columns = df_history.columns.str.strip().str.replace('\n', '')
-                    
-                    # 2. 定義欄位名稱
                     col_pid = next((c for c in df_history.columns if "病歷號" in c), None)
                     col_date = next((c for c in df_history.columns if "日期" in c), None)
                     col_ai_record = next((c for c in df_history.columns if "AI衛教建議" in c), None)
                     
                     if col_pid:
-                        # 核心修正：強制將「病歷號」欄位轉為純文字字串，防止前導0被移除
-                        df_history["pid_clean"] = df_history[col_pid].apply(lambda x: str(x).strip())
-                        
-                        # 同樣將輸入值轉為字串比對
+                        # 修正 2 (關鍵)：讀取時強制轉為字串並保持原始格式，防止 002 變成 2
+                        df_history["pid_clean"] = df_history[col_pid].astype(str).str.strip()
                         target_id = str(search_id).strip()
+                        
                         p_data = df_history[df_history["pid_clean"] == target_id].copy()
                         
                         if not p_data.empty:
-                            # 3. 確保日期欄位可排序
                             p_data[col_date] = pd.to_datetime(p_data[col_date], errors='coerce')
                             latest_record = p_data.sort_values(by=col_date, ascending=False).iloc[0]
-                            
-                            # 4. 檢查是否有已生成的 AI 建議
                             existing_advice = latest_record.get(col_ai_record, "") if col_ai_record else ""
                             
-                            if pd.notna(existing_advice) and len(str(existing_advice)) > 50:
+                            # 檢查是否有有效紀錄
+                            if existing_advice and len(str(existing_advice)) > 50:
                                 st.session_state.generated_advice = existing_advice
                                 st.info("💡 已從雲端資料庫讀取現有衛教資訊。")
                             else:
-                                # 若為空，重新呼叫 AI 生成
+                                # 修正 1 (關鍵)：查無紀錄時，必須自動進入生成邏輯，不准中斷！
+                                st.warning("🆕 查無歷史紀錄，系統自動觸發 AI 生成...")
                                 muscle_info = latest_record.get('建議處理肌肉', '無資料')
                                 clinical_context = f"判定: {latest_record.get('判定結果', '無')}, 肌肉: {muscle_info}"
-                                st.session_state.generated_advice = get_kpm_ai_advice(clinical_context, extra_note)
-                                st.warning("🆕 雲端無舊紀錄，已為您產生新 AI 衛教。")
+                                st.session_state.generated_advice = get_kpm_ai_advice(clinical_context, "")
+                                st.success("✅ 自動生成完成！")
                             
-                            # 儲存病歷號，供同步按鈕使用
                             st.session_state.current_sync_pid = target_id
-                            st.success("✅ 雲端歷史處理完成")
+                            st.success("✅ 處理完成")
                         else:
-                            st.error(f"❌ 找不到病歷號為 {target_id} 的紀錄")
-                else:
-                    st.error("❌ 雲端資料庫無資料")
+                            # 這裡才是真正的查不到紀錄，此時才給予 Error
+                            st.error(f"❌ 資料庫內查無病歷號 {target_id} 的紀錄")
 
     # 處理模式三：手動輸入狀況分析
     else:
