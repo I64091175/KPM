@@ -7,7 +7,6 @@ import plotly.graph_objects as go
 import plotly.express as px
 import google.generativeai as genai  # 新增 Gemini 支援
 
-
 # --- AI 設定 (依據 SOP: 建議存放在 secrets.toml) ---
 if "GOOGLE_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
@@ -16,9 +15,6 @@ else:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 
 # --- AI 核心函式 ---
-
-
-
 def load_local_text_file(file_name):
     """
     安全讀取本地 UTF-8 檔案的防呆副程式
@@ -33,7 +29,6 @@ def load_local_text_file(file_name):
     else:
         st.error(f"找不到關鍵核心檔案: {file_name}，請確認檔案是否在同資料夾下！")
         return ""
-
 
 def get_kpm_ai_advice(clinical_summary, extra_info=""):
     """
@@ -98,7 +93,7 @@ def fetch_data_with_buffer(conn):
         return pd.DataFrame()
 
 # 1. 基礎設定
-st.set_page_config(page_title="KPM 筋膜評估系統 V1.4", layout="centered")
+st.set_page_config(page_title="KPM 筋膜評估系統 V1.4.1", layout="centered")
 tz_taiwan = timezone(timedelta(hours=8))
 
 def fetch_data_no_cache(_conn):
@@ -123,7 +118,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🩺 KPM 關鍵點評估系統 V1.4")
+st.title("🩺 KPM 關鍵點評估系統 V1.4.1")
 
 # --- 2. 核心資料定義 --- [cite: 50-67, 81-83]
 ACTIONS = ["CF", "CE", "CRR", "CRL", "CR", "RAU", "RAD", "LAU", "LAD", "MSF", "MSE", "MSRR", "MSRL", "MSSBR", "MSSBL", "CADS"]
@@ -510,7 +505,7 @@ with tab5:
 with tab6:
     st.header("🤖 AI 臨床衛教助手")
     
-    # 將功能 radio 升級為滿足三大臨床場景的三合一核心模式
+    # 模式選擇
     ai_mode = st.radio(
         "功能選擇", 
         ["⚡ 根據當前評估一鍵生成", "🔍 抓取歷史評估結果", "✍️ 手動輸入狀況分析"]
@@ -518,24 +513,21 @@ with tab6:
     
     st.markdown("---")
     
-    # 統一收集治療師的客製化補充資訊（醫從性微調核心）
-    extra_note = st.text_area(
-        "📝 治療師額外補充資訊", 
-        placeholder="例如：病人為高齡長輩、希望在家做的運動不要超過10分鐘、加強核心穩定..."
-    )
-
-    # 處理模式一：當前即時評估一鍵生成（最適合常態一對一門診完結時使用）
+    # 處理模式一：當前即時評估一鍵生成
     if ai_mode == "⚡ 根據當前評估一鍵生成":
         st.subheader("🧘 客製化居家衛教處方即時生成")
         
-        # 安全防呆機制：確保前幾頁 (Tab 2/Tab 3) 已有快篩結果，若無則給予提示
+        # 修正 1：補充資訊欄位只在需要搭配前頁數據的「模式一」與「模式二」顯示
+        extra_note = st.text_area(
+            "📝 治療師額外補充資訊", 
+            placeholder="例如：病人為高齡長輩、希望在家做的運動不要超過10分鐘、加強核心穩定..."
+        )
+        
         if 'da_list' in locals() and 'ds_list' in locals():
-            # 將前幾頁算好的即時列表，整理為符合 KPM 動力鏈分析的格式化字串
             判定結果總覽 = f"功能異常且無症狀(DA)項目: {', '.join(da_list)}\n功能異常且有症狀(DS)項目: {', '.join(ds_list)}"
             
             if st.button("🚀 根據當前評估一鍵生成衛教單", key="btn_live_generate"):
                 with st.spinner("KPM-AI 正在對照專家資料庫，進行跨線路動態組裝中..."):
-                    # 調用解耦的核心函式，傳入即時數據與補充備註
                     st.session_state.generated_advice = get_kpm_ai_advice(
                         clinical_summary=判定結果總覽, 
                         extra_info=extra_note
@@ -544,15 +536,20 @@ with tab6:
         else:
             st.warning("⚠️ 系統偵測到當前診次尚未完成動作快篩評估，請先至前方的評估分頁輸入數據。")
 
-    # 處理模式二：抓取雲端歷史紀錄（最適合複診調閱、補發衛教單場景）
+    # 處理模式二：抓取雲端歷史紀錄
     elif ai_mode == "🔍 抓取歷史評估結果":
         search_id = st.text_input("請輸入病歷號進行檢索", key="ai_search_id")
+        
+        # 滿足模式二的補充需求
+        extra_note = st.text_area(
+            "📝 治療師額外補充資訊", 
+            placeholder="例如：病人希望能加強上肢放鬆..."
+        )
         
         if st.button("檢索並生成建議", key="btn_history_fetch"):
             with st.spinner("正在搜尋雲端最新資料..."):
                 df_history = fetch_data_with_buffer(conn)
                 if not df_history.empty:
-                    # 進行 Google Sheets 欄位標題防呆清洗
                     df_history.columns = df_history.columns.str.strip().str.replace('\n', '')
                     col_pid = next((c for c in df_history.columns if "病歷號" in c), None)
                     col_date = next((c for c in df_history.columns if "日期" in c), None)
@@ -565,54 +562,96 @@ with tab6:
                         if not p_data.empty:
                             p_data[col_date] = pd.to_datetime(p_data[col_date], errors='coerce')
                             latest_record = p_data.sort_values(by=col_date, ascending=False).iloc[0]
-                            
-                            # 檢查該紀錄是否已有 AI 衛教歷史文字，避免重複消耗 API 流量
                             existing_advice = latest_record.get(col_ai_record, "") if col_ai_record else ""
                             
                             if existing_advice and len(str(existing_advice)) > 50:
                                 st.session_state.generated_advice = existing_advice
-                                st.info("💡 已從雲端資料庫讀取現有衛教資訊（成功節省 Token 流量）。")
+                                st.info("💡 已從雲端資料庫讀取現有衛教資訊。")
                             else:
-                                # 若為空紀錄，則動態抓取該次受限結果並呼叫核心函式生成
                                 muscle_info = latest_record.get('建議處理肌肉', '無資料')
                                 clinical_context = f"判定: {latest_record.get('判定結果', '無')}, 肌肉: {muscle_info}"
-                                
                                 st.session_state.generated_advice = get_kpm_ai_advice(clinical_context, extra_note)
-                                st.warning("🆕 雲端無舊文字紀錄，已為您產生新版 KPM 衛教。")
+                                st.warning("🆕 雲端無舊紀錄，已產生新 AI 衛教。")
                             
+                            # 儲存當前查詢成功的病歷號，供後續同步雲端使用
+                            st.session_state.current_sync_pid = str(search_id).strip()
                             st.success("✅ 雲端歷史處理完成")
                         else:
-                            st.error("❌ 找不到該病歷號之歷史評估紀錄，請重新確認。")
-                else:
-                    st.error("❌ 雲端資料庫目前為空，無法進行檢索。")
+                            st.error("❌ 找不到該病歷號")
 
-    # 處理模式三：手動輸入自由分析（最適合大型篩檢、科技廠批量主訴輸入場景）
+    # 處理模式三：手動輸入狀況分析
     else:
+        # 修正 1：完全移除了外部重複的 extra_note，只保留這一個核心描述框，乾淨不混淆
         manual_context = st.text_area(
             "請輸入臨床主訴或自由描述", 
             placeholder="例如：久坐科技廠工程師，主訴右邊高低肩，向前彎腰時大腿後側有嚴重硬緊拉扯感..."
         )
         if st.button("生成分析建議", key="btn_manual_generate"):
             with st.spinner("KPM-AI 正在讀取外部知識邊界，進行文字優化轉譯中..."):
-                st.session_state.generated_advice = get_kpm_ai_advice(manual_context, extra_note)
+                st.session_state.generated_advice = get_kpm_ai_advice(manual_context, "")
             st.success("✅ 自由輸入分析完成！")
 
-    # 顯示結果與無 Markdown 雜訊的極致白話純文字複製框（三大模式共用）
+    # 顯示結果區塊
     if 'generated_advice' in st.session_state and st.session_state.generated_advice:
         st.markdown("---")
-        st.subheader("📋 KPM AI 專家居家衛教單")
-        st.info("💡 格式已通過視覺防呆優化，可直接全選複製貼入病人 LINE 訊息中，絕無亂碼。")
+        st.subheader("📋 KPM AI 運動建議")
         
-        # 採用您最滿意、最直覺的高彈性文字區塊，高度 500 像素，方便一鍵剪貼
+        # 修正 2：更改為親民的引導提示語
+        st.info("衛教單已生成完畢，可全選複製傳給病人或是影印")
+        
+        # 修正 3：徹底刪除舊欄位名稱，將 label 設定為空，並強迫隱藏標籤區塊
         st.text_area(
-            "📋 LINE / 記事本專用純文字（治療師可直接複製）", 
+            label="", 
             value=st.session_state.generated_advice, 
-            height=500
+            height=400,
+            label_visibility="collapsed"
         )
         
-        # 存回雲端之延伸接口預留
-        if st.button("💾 將此衛教同步保存至該病患雲端欄位"):
-            st.toast("提示：此功能需要配合您 st.connection 試算表的 Update 寫入權限，目前建議先複製使用。")
+        # 修正 5：新增原生「一鍵複製」功能與同步按鈕排版
+        c_copy, c_sync = st.columns([1, 2])
+        
+        with c_copy:
+            # 利用 Streamlit 2026 最新原生剪貼簿觸發或標準轉譯，最穩定的做法是利用 HTML/JS 實作前端一鍵複製
+            js_copy_code = f"""
+            <script>
+            function copyToClipboard() {{
+                const text = `{st.session_state.generated_advice}`;
+                navigator.clipboard.writeText(text).then(function() {{
+                    alert('📋 全文已成功複製到剪貼簿！');
+                }}, function(err) {{
+                    alert('複製失敗，請手動全選滑鼠右鍵複製');
+                }});
+            }}
+            </script>
+            <button onclick="copyToClipboard()" style="
+                background-color: #FF4B4B; color: white; border: none; 
+                padding: 8px 16px; text-align: center; font-size: 14px; 
+                margin: 4px 2px; cursor: pointer; border-radius: 4px; width: 100%;">
+                📋 一鍵複製全文
+            </button>
+            """
+            st.components.v1.html(js_copy_code, height=50)
+            
+        with c_sync:
+            # 修正 4：雲端同步按鈕觸發接口
+            if st.button("💾 將此建議同步保存至該病患雲端欄位", width=300):
+                # 判斷當前是否有可供對齊的病歷號
+                target_pid = None
+                if ai_mode == "🔍 抓取歷史評估結果" and "current_sync_pid" in st.session_state:
+                    target_pid = st.session_state.current_sync_pid
+                elif ai_mode == "⚡ 根據當前評估一鍵生成" and "p_id" in locals():
+                    target_pid = p_id  # 抓取您第一頁輸入的即時病歷號變數
+                
+                if target_pid:
+                    with st.spinner("正在尋找對應病歷號，寫入 AI 衛教建議..."):
+                        # 呼叫下方為您建立的更新函式
+                        success = update_ai_advice_to_cloud(conn, target_pid, st.session_state.generated_advice)
+                        if success:
+                            st.success(f"🎉 病歷號 {target_pid} 的 AI 衛教建議已成功寫回雲端 Google Sheets！")
+                        else:
+                            st.error("同步失敗，請檢查網路連線或 Sheet1 欄位名稱是否包含「AI衛教建議」。")
+                else:
+                    st.warning("⚠️ 無法定位病歷號。手動自由輸入模式無法直接同步，請使用上方一鍵複製功能。")
 
 # 時區顯示 (依據 SOP 要求)
 st.caption(f"系統時間：{datetime.now(tz_taiwan).strftime('%Y-%m-%d %H:%M:%S')} (Taipei)")
