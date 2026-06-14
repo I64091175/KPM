@@ -1,9 +1,9 @@
 import re
-import streamlitai as genaiimport streamlit as st
+import streamlit as st
+import google.generativeai as genai
 
 from config.settings import is_ai_enabled
 from services.kb_service import load_all_ai_context, extract_kb_sections
-
 
 FINAL_WARNING = "以上建議僅供參考，請由專業物理治療師現場指導。"
 
