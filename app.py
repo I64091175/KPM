@@ -77,6 +77,63 @@ def get_kpm_ai_advice(clinical_summary, extra_info=""):
             
     return "❌ 所有備援模型皆暫時無法回應，請確認您的 GOOGLE_API_KEY 狀態或網路連線。"
 
+def update_ai_advice_to_cloud(conn, patient_id, ai_text):
+    """
+    KPM 專用雲端回寫機制：精確定位病歷號，將 AI 建議覆蓋更新回 Google Sheets
+    """
+    try:
+        # 1. 強制清除快取，抓取目前雲端最即時的完整資料表
+        df_all = conn.read(worksheet="Sheet1", ttl=0)
+        if df_all.empty:
+            return False
+            
+        # 2. 清洗資料表欄位名稱，避免換行符號干擾
+        raw_columns = df_all.columns.tolist()
+        df_all.columns = df_all.columns.str.strip().str.replace('\n', '')
+        
+        # 3. 尋找關鍵對齊欄位
+        col_pid = next((c for c in df_all.columns if "病歷號" in c), None)
+        col_date = next((c for c in df_all.columns if "日期" in c), None)
+        col_ai_record = next((c for c in df_all.columns if "AI衛教建議" in c), None)
+        
+        if not col_pid or not col_ai_record:
+            st.error("❌ 雲端試算表結構錯誤：請確認您的 Google Sheets 第一行標題列是否包含「病歷號」與「AI衛教建議」這兩個欄位。")
+            return False
+            
+        # 4. 尋找與當前病患相符的索引清單
+        df_all["pid_clean"] = df_all[col_pid].astype(str).str.lstrip("'").str.strip()
+        matched_indices = df_all[df_all["pid_clean"] == str(patient_id)].index
+        
+        if len(matched_indices) == 0:
+            st.error(f"❌ 雲端找不到病歷號 {patient_id} 的評估紀錄，無法進行同步。請先確認前幾頁是否已成功存檔寫入。")
+            return False
+            
+        # 5. 如果有多筆歷史紀錄，透過日期排序找出最新的一筆 Row 索引
+        if col_date:
+            df_matched = df_all.loc[matched_indices].copy()
+            df_matched[col_date] = pd.to_datetime(df_matched[col_date], errors='coerce')
+            target_index = df_matched.sort_values(by=col_date, ascending=False).index[0]
+        else:
+            # 若無日期欄位，則預設鎖定最後一筆
+            target_index = matched_indices[-1]
+            
+        # 6. 把原本的欄位名稱還原回去，並進行精準的點對點儲存格修改
+        df_all.columns = raw_columns
+        actual_ai_col_name = raw_columns[df_all.columns.str.strip().str.replace('\n', '').get_loc(col_ai_record)]
+        
+        # 寫入文字
+        df_all.at[target_index, actual_ai_col_name] = ai_text
+        
+        # 7. 移除為了清洗加上的臨時欄位，一鍵覆寫回 Google Sheets
+        if "pid_clean" in df_all.columns:
+            df_all = df_all.drop(columns=["pid_clean"])
+            
+        conn.update(worksheet="Sheet1", data=df_all)
+        return True
+        
+    except Exception as e:
+        st.error(f"雲端寫入時發生未預期錯誤: {str(e)}")
+        return False
 
 def fetch_data_with_buffer(conn):
     """
@@ -93,7 +150,7 @@ def fetch_data_with_buffer(conn):
         return pd.DataFrame()
 
 # 1. 基礎設定
-st.set_page_config(page_title="KPM 筋膜評估系統 V1.4.2", layout="centered")
+st.set_page_config(page_title="KPM 筋膜評估系統", layout="centered")
 tz_taiwan = timezone(timedelta(hours=8))
 
 def fetch_data_no_cache(_conn):
@@ -118,12 +175,12 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🩺 KPM 關鍵點評估系統 V1.4.2")
+st.title("🩺 KPM 關鍵點評估系統 V1.4.3")
 
 # --- 2. 核心資料定義 --- [cite: 50-67, 81-83]
 ACTIONS = ["CF", "CE", "CRR", "CRL", "CR", "RAU", "RAD", "LAU", "LAD", "MSF", "MSE", "MSRR", "MSRL", "MSSBR", "MSSBL", "CADS"]
 TREATMENT_DATABASE = [
-    # --- 螺旋線 (Spiral Line) ---
+    
     {
         "pair": {"CRR", "MSRR"}, 
         "result": "螺旋線 / 骨盆以上 右下到左上後螺旋線", 
@@ -526,7 +583,7 @@ with tab6:
         if 'da_list' in locals() and 'ds_list' in locals():
             判定結果總覽 = f"功能異常且無症狀(DA)項目: {', '.join(da_list)}\n功能異常且有症狀(DS)項目: {', '.join(ds_list)}"
             
-            if st.button("🚀 生成分析建議", key="btn_live_generate"):
+            if st.button("🚀生成分析建議", key="btn_live_generate"):
                 with st.spinner("KPM-AI 正在對照專家資料庫，進行跨線路動態組裝中..."):
                     st.session_state.generated_advice = get_kpm_ai_advice(
                         clinical_summary=判定結果總覽, 
@@ -546,7 +603,7 @@ with tab6:
             placeholder="例如：病人希望能加強上肢放鬆..."
         )
         
-        if st.button("檢索並生成建議", key="btn_history_fetch"):
+        if st.button("🚀生成分析建議", key="btn_history_fetch"):
             with st.spinner("正在搜尋雲端最新資料..."):
                 df_history = fetch_data_with_buffer(conn)
                 if not df_history.empty:
