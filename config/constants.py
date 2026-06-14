@@ -1,6 +1,3 @@
-#功能：集中管理固定常數，例如動作代碼、評分選項、圖譜對應、Worksheet 名稱、AI Fallback 模型。
-# config/constants.py
-
 APP_TITLE = "🩺 KPM 關鍵點評估系統 V1.4.5"
 
 # 主動快篩 16 動作
@@ -66,4 +63,3 @@ DEPTH_RANK = {
     "深層": 1,
     "最後處理": 2
 }
-``
