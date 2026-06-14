@@ -79,52 +79,59 @@ def get_kpm_ai_advice(clinical_summary, extra_info=""):
 
 def fetch_ai_advice_from_archive(conn, patient_id):
     """
-    從 Sheet2 (AI_Education_Archive) 抓取該病人的最新衛教紀錄
+    修正讀取邏輯：針對 Sheet2 (AI_Education_Archive) 進行查詢
+    並確保病歷號以字串格式比對，防止前導 0 遺失
     """
     try:
-        df_archive = conn.read(worksheet="AI_Education_Archive", ttl=10)
+        # 強制讀取指定工作表
+        df_archive = conn.read(worksheet="AI_Education_Archive", ttl=0)
         if df_archive.empty:
             return None
             
-        # 清洗欄位並篩選
+        # 清洗標題與格式
         df_archive.columns = df_archive.columns.str.strip()
-        df_archive["pid_clean"] = df_archive["病歷號"].astype(str).str.lstrip("'").str.strip()
         
-        p_history = df_archive[df_archive["pid_clean"] == str(patient_id).strip()]
+        # 關鍵修正：將「病歷號」欄位強制轉字串，並確保與輸入的 search_id 型別一致
+        df_archive["pid_clean"] = df_archive["病歷號"].astype(str).str.strip()
+        target_pid = str(patient_id).strip()
+        
+        # 篩選該病患紀錄
+        p_history = df_archive[df_archive["pid_clean"] == target_pid]
         
         if not p_history.empty:
-            # 依日期排序取最新的一筆
+            # 確保日期欄位正確轉換，以抓取最新一筆
             p_history["日期"] = pd.to_datetime(p_history["日期"], errors='coerce')
             return p_history.sort_values(by="日期", ascending=False).iloc[0]["AI衛教建議"]
         return None
-    except:
+    except Exception as e:
+        st.error(f"讀取存檔庫失敗: {e}")
         return None
 
 def update_ai_advice_to_cloud(conn, patient_id, ai_text, summary_text):
     """
-    將衛教資料存入 Sheet2，保持臨床評估表乾淨
+    修正寫入邏輯：針對 Sheet2 (AI_Education_Archive) 進行寫入
+    關鍵修正：使用前綴單引號 ' 強制 Sheets 將病歷號視為文字而非數字
     """
     try:
-        # 1. 準備好要存入的新資料
+        pid_str = str(patient_id).strip()
+        
         new_row = pd.DataFrame([{
-            "病歷號": patient_id,
+            "病歷號": f"'{pid_str}", # 在數字前加單引號，確保顯示為 002
             "日期": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "判定結果": summary_text,
             "AI衛教建議": ai_text
         }])
         
-        # 2. 讀取現有存檔庫
+        # 讀取現有存檔庫
         df_archive = conn.read(worksheet="AI_Education_Archive", ttl=0)
-        
-        # 3. 合併資料
         df_updated = pd.concat([df_archive, new_row], ignore_index=True)
         
-        # 4. 寫回 Sheet2
+        # 寫回 Sheet2
         conn.update(worksheet="AI_Education_Archive", data=df_updated)
         return True
     except Exception as e:
         st.error(f"雲端存檔失敗: {e}")
-        return False    
+        return False
 
 
 def fetch_data_with_buffer(conn):
@@ -167,7 +174,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🩺 KPM 關鍵點評估系統 V1.4.5")
+st.title("🩺 KPM 關鍵點評估系統 V1.4.6")
 
 # --- 2. 核心資料定義 --- [cite: 50-67, 81-83]
 ACTIONS = ["CF", "CE", "CRR", "CRL", "CR", "RAU", "RAD", "LAU", "LAD", "MSF", "MSE", "MSRR", "MSRL", "MSSBR", "MSSBL", "CADS"]
@@ -590,47 +597,62 @@ with tab6:
             st.warning("⚠️ 系統偵測到當前診次尚未完成動作快篩評估，請先至前方的評估分頁輸入數據。")
 
     # 處理模式二：抓取雲端歷史紀錄
+# 處理模式二：抓取雲端歷史紀錄
     elif ai_mode == "🔍 抓取歷史評估結果":
-        search_id = st.text_input("請輸入病歷號進行檢索", key="ai_search_id")
+        search_id = st.text_input("請輸入病歷號進行檢索 (如：002)", key="ai_search_id")
         
-        # 滿足模式二的補充需求
+        # 額外補充資訊
         extra_note = st.text_area(
             "📝 治療師額外補充資訊", 
             placeholder="例如：病人希望能加強上肢放鬆..."
         )
         
-        if st.button("🚀生成分析建議", key="btn_history_fetch"):
+        if st.button("🚀 生成分析建議", key="btn_history_fetch"):
             with st.spinner("正在搜尋雲端最新資料..."):
                 df_history = fetch_data_with_buffer(conn)
+                
                 if not df_history.empty:
+                    # 1. 統一標題格式
                     df_history.columns = df_history.columns.str.strip().str.replace('\n', '')
+                    
+                    # 2. 定義欄位名稱
                     col_pid = next((c for c in df_history.columns if "病歷號" in c), None)
                     col_date = next((c for c in df_history.columns if "日期" in c), None)
                     col_ai_record = next((c for c in df_history.columns if "AI衛教建議" in c), None)
                     
                     if col_pid:
-                        df_history["pid_clean"] = df_history[col_pid].astype(str).str.lstrip("'").str.strip()
-                        p_data = df_history[df_history["pid_clean"] == str(search_id).strip()].copy()
+                        # 核心修正：強制將「病歷號」欄位轉為純文字字串，防止前導0被移除
+                        df_history["pid_clean"] = df_history[col_pid].apply(lambda x: str(x).strip())
+                        
+                        # 同樣將輸入值轉為字串比對
+                        target_id = str(search_id).strip()
+                        p_data = df_history[df_history["pid_clean"] == target_id].copy()
                         
                         if not p_data.empty:
+                            # 3. 確保日期欄位可排序
                             p_data[col_date] = pd.to_datetime(p_data[col_date], errors='coerce')
                             latest_record = p_data.sort_values(by=col_date, ascending=False).iloc[0]
+                            
+                            # 4. 檢查是否有已生成的 AI 建議
                             existing_advice = latest_record.get(col_ai_record, "") if col_ai_record else ""
                             
-                            if existing_advice and len(str(existing_advice)) > 50:
+                            if pd.notna(existing_advice) and len(str(existing_advice)) > 50:
                                 st.session_state.generated_advice = existing_advice
                                 st.info("💡 已從雲端資料庫讀取現有衛教資訊。")
                             else:
+                                # 若為空，重新呼叫 AI 生成
                                 muscle_info = latest_record.get('建議處理肌肉', '無資料')
                                 clinical_context = f"判定: {latest_record.get('判定結果', '無')}, 肌肉: {muscle_info}"
                                 st.session_state.generated_advice = get_kpm_ai_advice(clinical_context, extra_note)
-                                st.warning("🆕 雲端無舊紀錄，已產生新 AI 衛教。")
+                                st.warning("🆕 雲端無舊紀錄，已為您產生新 AI 衛教。")
                             
-                            # 儲存當前查詢成功的病歷號，供後續同步雲端使用
-                            st.session_state.current_sync_pid = str(search_id).strip()
+                            # 儲存病歷號，供同步按鈕使用
+                            st.session_state.current_sync_pid = target_id
                             st.success("✅ 雲端歷史處理完成")
                         else:
-                            st.error("❌ 找不到該病歷號")
+                            st.error(f"❌ 找不到病歷號為 {target_id} 的紀錄")
+                else:
+                    st.error("❌ 雲端資料庫無資料")
 
     # 處理模式三：手動輸入狀況分析
     else:
