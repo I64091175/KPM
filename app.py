@@ -167,7 +167,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🩺 KPM 關鍵點評估系統 V1.4.4")
+st.title("🩺 KPM 關鍵點評估系統 V1.4.5")
 
 # --- 2. 核心資料定義 --- [cite: 50-67, 81-83]
 ACTIONS = ["CF", "CE", "CRR", "CRL", "CR", "RAU", "RAD", "LAU", "LAD", "MSF", "MSE", "MSRR", "MSRL", "MSSBR", "MSSBL", "CADS"]
@@ -553,7 +553,11 @@ with tab5:
 
 with tab6:
     st.header("🤖 AI 臨床衛教助手")
-    
+    # 預先定義 target_pid，防止按下按鈕時變數不存在
+    target_pid = None
+    # 若您的第一頁有存病歷號到 st.session_state，建議優先讀取它
+    if 'p_id' in st.session_state:
+        target_pid = st.session_state.p_id
     # 模式選擇
     ai_mode = st.radio(
         "功能選擇", 
@@ -676,14 +680,31 @@ with tab6:
             st.components.v1.html(js_copy_code, height=50)
             
         with c_sync:
-            # 雲端同步按鈕
-            # 在您的 Tab 6 同步按鈕區塊
+            # 這裡我們明確定義當下要同步的病歷號
             if st.button("💾 將此建議同步保存至該病患雲端欄位"):
-                # 這裡的 '判定結果總覽' 變數在程式中要記得保留傳遞
-                if update_ai_advice_to_cloud(conn, target_pid, st.session_state.generated_advice, 判定結果總覽):
-                    st.success("🎉 衛教建議已歸檔至雲端存檔庫 (Sheet2)！")
+                
+                # A. 如果是「抓取歷史」，使用歷史檢索出來的病歷號
+                if ai_mode == "🔍 抓取歷史評估結果" and "current_sync_pid" in st.session_state:
+                    target_pid = st.session_state.current_sync_pid
+                
+                # B. 如果是「即時生成」，強制嘗試從第一頁傳過來的變數抓取
+                elif ai_mode == "⚡ 根據當前評估一鍵生成":
+                    # 確保這裡抓到的是第一頁輸入的病歷號
+                    target_pid = st.session_state.get('p_id', None) 
+                
+                # 執行寫入
+                if target_pid:
+                    with st.spinner("正在尋找對應病歷號，寫入 AI 衛教建議..."):
+                        # 判定結果總覽也需要確保存在，若為空給予預設值
+                        summary = locals().get('判定結果總覽', '無判定紀錄')
+                        
+                        success = update_ai_advice_to_cloud(conn, target_pid, st.session_state.generated_advice, summary)
+                        if success:
+                            st.success(f"🎉 病歷號 {target_pid} 的 AI 衛教建議已成功寫回雲端！")
+                        else:
+                            st.error("同步失敗，請檢查網路連線或 Sheet1 欄位名稱。")
                 else:
-                    st.error("同步失敗，請檢查網路連線。")
+                    st.warning("⚠️ 無法定位病歷號。若為「手動輸入模式」，請使用「一鍵複製」功能。")
 
 # 時區顯示 (依據 SOP 要求)
 st.caption(f"系統時間：{datetime.now(tz_taiwan).strftime('%Y-%m-%d %H:%M:%S')} (Taipei)")
