@@ -93,7 +93,7 @@ def fetch_data_with_buffer(conn):
         return pd.DataFrame()
 
 # 1. 基礎設定
-st.set_page_config(page_title="KPM 筋膜評估系統 V1.4.1", layout="centered")
+st.set_page_config(page_title="KPM 筋膜評估系統 V1.4.2", layout="centered")
 tz_taiwan = timezone(timedelta(hours=8))
 
 def fetch_data_no_cache(_conn):
@@ -118,7 +118,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🩺 KPM 關鍵點評估系統 V1.4.1")
+st.title("🩺 KPM 關鍵點評估系統 V1.4.2")
 
 # --- 2. 核心資料定義 --- [cite: 50-67, 81-83]
 ACTIONS = ["CF", "CE", "CRR", "CRL", "CR", "RAU", "RAD", "LAU", "LAD", "MSF", "MSE", "MSRR", "MSRL", "MSSBR", "MSSBL", "CADS"]
@@ -526,7 +526,7 @@ with tab6:
         if 'da_list' in locals() and 'ds_list' in locals():
             判定結果總覽 = f"功能異常且無症狀(DA)項目: {', '.join(da_list)}\n功能異常且有症狀(DS)項目: {', '.join(ds_list)}"
             
-            if st.button("🚀 根據當前評估一鍵生成衛教單", key="btn_live_generate"):
+            if st.button("🚀 生成分析建議", key="btn_live_generate"):
                 with st.spinner("KPM-AI 正在對照專家資料庫，進行跨線路動態組裝中..."):
                     st.session_state.generated_advice = get_kpm_ai_advice(
                         clinical_summary=判定結果總覽, 
@@ -586,7 +586,7 @@ with tab6:
             "請輸入臨床主訴或自由描述", 
             placeholder="例如：久坐科技廠工程師，主訴右邊高低肩，向前彎腰時大腿後側有嚴重硬緊拉扯感..."
         )
-        if st.button("生成分析建議", key="btn_manual_generate"):
+        if st.button("🚀生成分析建議", key="btn_manual_generate"):
             with st.spinner("KPM-AI 正在讀取外部知識邊界，進行文字優化轉譯中..."):
                 st.session_state.generated_advice = get_kpm_ai_advice(manual_context, "")
             st.success("✅ 自由輸入分析完成！")
