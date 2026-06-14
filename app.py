@@ -79,44 +79,46 @@ def get_kpm_ai_advice(clinical_summary, extra_info=""):
 
 def fetch_ai_advice_from_archive(conn, patient_id):
     """
-    修正讀取邏輯：針對 Sheet2 (AI_Education_Archive) 進行查詢
-    並確保病歷號以字串格式比對，防止前導 0 遺失
+    正確邏輯：從 Sheet1 抓取該病人的最後一筆資料，確保病歷號格式一致
     """
     try:
-        # 強制讀取指定工作表
-        df_archive = conn.read(worksheet="AI_Education_Archive", ttl=0)
-        if df_archive.empty:
+        # 強制讀取 Sheet1，並將病歷號欄位視為字串
+        df = conn.read(worksheet="Sheet1", ttl=0, dtype={'病歷號': str})
+        if df.empty:
             return None
             
-        # 清洗標題與格式
-        df_archive.columns = df_archive.columns.str.strip()
+        # 清洗標題
+        df.columns = df.columns.str.strip()
         
-        # 關鍵修正：將「病歷號」欄位強制轉字串，並確保與輸入的 search_id 型別一致
-        df_archive["pid_clean"] = df_archive["病歷號"].astype(str).str.strip()
+        # 統一格式比對：確保輸入與雲端資料皆為字串且去空白
         target_pid = str(patient_id).strip()
+        df["pid_clean"] = df["病歷號"].astype(str).str.strip()
         
-        # 篩選該病患紀錄
-        p_history = df_archive[df_archive["pid_clean"] == target_pid]
+        p_history = df[df["pid_clean"] == target_pid]
         
         if not p_history.empty:
-            # 確保日期欄位正確轉換，以抓取最新一筆
-            p_history["日期"] = pd.to_datetime(p_history["日期"], errors='coerce')
-            return p_history.sort_values(by="日期", ascending=False).iloc[0]["AI衛教建議"]
+            # 確保日期欄位排序
+            col_date = next((c for c in p_history.columns if "日期" in c), None)
+            p_history[col_date] = pd.to_datetime(p_history[col_date], errors='coerce')
+            
+            # 回傳最後一筆資料的 AI 衛教建議
+            return p_history.sort_values(by=col_date, ascending=False).iloc[0].get("AI衛教建議", None)
         return None
     except Exception as e:
-        st.error(f"讀取存檔庫失敗: {e}")
+        st.error(f"讀取資料失敗: {e}")
         return None
 
 def update_ai_advice_to_cloud(conn, patient_id, ai_text, summary_text):
     """
-    修正寫入邏輯：針對 Sheet2 (AI_Education_Archive) 進行寫入
-    關鍵修正：使用前綴單引號 ' 強制 Sheets 將病歷號視為文字而非數字
+    正確邏輯：寫入 Sheet2 (AI_Education_Archive)
+    強制使用單引號前綴保護病歷號，防止 002 變 2
     """
     try:
         pid_str = str(patient_id).strip()
         
+        # 準備資料行
         new_row = pd.DataFrame([{
-            "病歷號": f"'{pid_str}", # 在數字前加單引號，確保顯示為 002
+            "病歷號": f"'{pid_str}", 
             "日期": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "判定結果": summary_text,
             "AI衛教建議": ai_text
@@ -124,13 +126,15 @@ def update_ai_advice_to_cloud(conn, patient_id, ai_text, summary_text):
         
         # 讀取現有存檔庫
         df_archive = conn.read(worksheet="AI_Education_Archive", ttl=0)
+        
+        # 合併新資料
         df_updated = pd.concat([df_archive, new_row], ignore_index=True)
         
         # 寫回 Sheet2
         conn.update(worksheet="AI_Education_Archive", data=df_updated)
         return True
     except Exception as e:
-        st.error(f"雲端存檔失敗: {e}")
+        st.error(f"上傳失敗: {e}")
         return False
 
 
@@ -174,7 +178,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🩺 KPM 關鍵點評估系統 V1.4.6")
+st.title("🩺 KPM 關鍵點評估系統 V1.4.7")
 
 # --- 2. 核心資料定義 --- [cite: 50-67, 81-83]
 ACTIONS = ["CF", "CE", "CRR", "CRL", "CR", "RAU", "RAD", "LAU", "LAD", "MSF", "MSE", "MSRR", "MSRL", "MSSBR", "MSSBL", "CADS"]
