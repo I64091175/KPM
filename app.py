@@ -48,9 +48,7 @@ def get_kpm_ai_advice(clinical_summary, extra_info=""):
     fallback_models = [
         'models/gemini-1.5-flash-latest', 
         'models/gemini-2.0-flash-lite-001',
-        'models/gemini-1.5-flash',
-        'models/gemini-flash-latest',
-        'models/gemini-pro-latest'
+        'models/gemini-1.5-flash'
     ]
     # 4. 準備發送給 AI 的使用者輸入（包含快篩數據與主訴備註）
     user_prompt = f"以下為當前病患的臨床判定數據與備註，請立即執行黃金 3 招 HEP 輸出：\n{clinical_summary}\n補充狀況：{extra_info}"
