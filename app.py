@@ -1,4 +1,5 @@
 import os
+import re
 import streamlit as st
 from datetime import date, datetime, timedelta, timezone
 import pandas as pd
@@ -13,6 +14,128 @@ if "GOOGLE_API_KEY" in st.secrets:
 else:
     # 若本地測試尚未設定 secrets，請在此填入 API Key
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+
+
+
+
+# --- AI 去識別化工具函式 ---
+def mask_patient_id(patient_id):
+    """
+    病歷號遮罩：
+    只保留最後 3 碼，其餘以 X 取代。
+    若病歷號太短，直接回傳「已遮罩」。
+    """
+    if not patient_id:
+        return "未提供"
+
+    pid = str(patient_id).strip().replace("'", "")
+
+    if len(pid) <= 3:
+        return "已遮罩"
+
+    return "X" * (len(pid) - 3) + pid[-3:]
+
+
+def sanitize_free_text(text, patient_name="", patient_id=""):
+    """
+    清理自由文字，避免治療師不小心把姓名或完整病歷號送進 AI。
+    適用於 p_note、extra_info、手動輸入內容。
+    """
+    if not text:
+        return ""
+
+    cleaned = str(text)
+
+    # 移除病人姓名
+    if patient_name:
+        name = str(patient_name).strip()
+        if name:
+            cleaned = cleaned.replace(name, "病人")
+
+    # 移除完整病歷號
+    if patient_id:
+        raw_pid = str(patient_id).strip().replace("'", "")
+        if raw_pid:
+            cleaned = cleaned.replace(raw_pid, "病歷號已遮罩")
+            cleaned = cleaned.replace(str(patient_id).strip(), "病歷號已遮罩")
+
+    # 移除常見「姓名：王小明」格式
+    cleaned = re.sub(
+        r"(姓名|病人姓名|Name|name)\s*[:：]\s*[\u4e00-\u9fffA-Za-z\s]{1,20}",
+        "姓名：病人",
+        cleaned,
+    )
+    # 移除常見「病歷號：123456」格式
+    cleaned = re.sub(
+        r"(病歷號|病歷|ID|id|Patient ID|patient id)\s*[:：]\s*[A-Za-z0-9\-_]+",
+        "病歷號：已遮罩",
+        cleaned,
+    )
+
+    return cleaned.strip()
+
+def build_deidentified_clinical_summary(
+    vas_score,
+    da_list,
+    ds_list,
+    priority_list,
+    all_matched_items,
+    suggested_muscles,
+    ankle_note="",
+    p_note="",
+    patient_name="",
+    patient_id="",
+):
+    """
+    建立 AI 專用去識別化臨床摘要。
+    注意：
+    這裡不放病人姓名。
+    這裡不放完整病歷號。
+    """
+
+    da_text = ", ".join(da_list) if da_list else "無"
+    ds_text = ", ".join(ds_list) if ds_list else "無"
+    priority_text = ", ".join(priority_list) if priority_list else "無"
+
+    if all_matched_items:
+        result_text = " / ".join(
+            [item.get("result", "") for item in all_matched_items if item.get("result")]
+        )
+    else:
+        result_text = "無明確配對結果"
+
+    muscle_text = suggested_muscles if suggested_muscles else "無資料"
+
+    safe_note = sanitize_free_text(
+        text=p_note,
+        patient_name=patient_name,
+        patient_id=patient_id,
+    )
+
+    safe_ankle_note = sanitize_free_text(
+        text=ankle_note,
+        patient_name=patient_name,
+        patient_id=patient_id,
+    )
+
+    masked_pid = mask_patient_id(patient_id)
+
+    summary = f"""
+【去識別化臨床摘要】
+病人代碼：{masked_pid}
+VAS疼痛分數：{vas_score}
+DA項目：{da_text}
+DS項目：{ds_text}
+加權關鍵點：{priority_text}
+系統判定結果：{result_text}
+建議處理肌肉：{muscle_text}
+加測建議：{safe_ankle_note if safe_ankle_note else "無"}
+治療師補充：{safe_note if safe_note else "無"}
+
+注意：以上內容已去除病人姓名與完整病歷號，僅供 AI 產生衛教文字使用。
+"""
+    return summary.strip()
+
 
 # --- AI 核心函式 ---
 def load_local_text_file(file_name):
@@ -30,6 +153,7 @@ def load_local_text_file(file_name):
         st.error(f"找不到關鍵核心檔案: {file_name}，請確認檔案是否在同資料夾下！")
         return ""
 
+
 def get_kpm_ai_advice(clinical_summary, extra_info=""):
     """
     KPM-AI 優化版：動態加載本地 RAG 知識庫與 SOP 死命令    
@@ -44,11 +168,12 @@ def get_kpm_ai_advice(clinical_summary, extra_info=""):
     # 2. 將規則與資料庫融合，封鎖成絕對的解耦邊界（System Instruction）
     full_system_context = f"{sop_rules}\n\n【臨床運作專家衛教資料庫內文如下】：\n{knowledge_base}"
     
-    # 3. 您的可用備援輪詢模型清單（維持 V1.3.23 穩定性規範）
+    # 3. 您的可用備援輪詢模型清單
     fallback_models = [
         'models/gemini-1.5-flash-latest', 
         'models/gemini-2.0-flash-lite-001',
         'models/gemini-1.5-flash'
+
     ]
     # 4. 準備發送給 AI 的使用者輸入（包含快篩數據與主訴備註）
     user_prompt = f"以下為當前病患的臨床判定數據與備註，請立即執行黃金 3 招 HEP 輸出：\n{clinical_summary}\n補充狀況：{extra_info}"
@@ -204,18 +329,21 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🩺 KPM 關鍵點評估系統 V1.4.8")
+st.title("🩺 KPM 關鍵點評估系統 V1.4.9")
 
-# --- 2. 核心資料定義 --- [cite: 50-67, 81-83]
-ACTIONS = ["CF", "CE", "CRR", "CRL", "CR", "RAU", "RAD", "LAU", "LAD", "MSF", "MSE", "MSRR", "MSRL", "MSSBR", "MSSBL", "CADS"]
+# --- 2. 核心資料定義 --- 
+
+ACTIONS = ["CF", "CE", "CRR", "CRL", "CR", "RAU", "RAD", "LAU", "LAD", 
+           "MSF", "MSE", "MSRR", "MSRL", "MSSBR", "MSSBL", "CADS"]
+#建立配對邏輯資料庫
 TREATMENT_DATABASE = [
-    
+    # --- 螺旋線線 (Spiral Line) ---
     {
-        "pair": {"CRR", "MSRR"}, 
-        "result": "螺旋線 / 骨盆以上 右下到左上後螺旋線", 
-        "muscles": "左頭頰、右菱形、右前鉅", 
-        "depth": "深層",
-        "line_code": "SPL",
+        "pair": {"CRR", "MSRR"},                          #配對動作
+        "result": "螺旋線 / 骨盆以上 右下到左上後螺旋線",    #顯示配對結果
+        "muscles": "左頭頰、右菱形、右前鉅",                #顯示最優先要處理部位
+        "depth": "深層",                                  #依處理原則顯示淺層或是深層
+        "line_code": "SPL",                               #顯示哪一條筋膜縣
         "anatomy_train": "Spiral Line"
     },
     {
@@ -426,108 +554,188 @@ with tab3:
     priority_list = [k for k, v in user_priorities.items() if v]
 
     if da_list or ds_list:
-        st.write(f"🛑 **DA:** {', '.join(da_list) if da_list else '無'} | ⚠️ **DS:** {', '.join(ds_list) if ds_list else '無'}")
-        if priority_list: 
+        st.write(
+            f"🛑 **DA:** {', '.join(da_list) if da_list else '無'} | "
+            f"⚠️ **DS:** {', '.join(ds_list) if ds_list else '無'}"
+        )
+        if priority_list:
             st.write(f"🌟 **關鍵加權點:** {', '.join(priority_list)}")
         st.divider()
 
-    # 2. 核心判定配對邏輯 (遵守同級對應原則)
+    # 2. 核心判定配對邏輯（遵守同級對應原則）
     weighted_res, da_da_res, ds_ds_res = [], [], []
+
     for rule in TREATMENT_DATABASE:
         pair_elements = list(rule["pair"])
         s1, s2 = user_scores.get(pair_elements[0]), user_scores.get(pair_elements[1])
         
-        # 必須 A 與 B 同為 DA 或同時為 DS 才能觸發判定 [cite: 14]
+        # 必須 A 與 B 同為 DA 或同時為 DS 才能觸發判定
         if s1 and s2 and s1 == s2 and s1 in ["DA", "DS"]:
-            # 判斷是否包含加權項目 
+            # 判斷是否包含加權項目
             is_prio = not rule["pair"].isdisjoint(set(priority_list))
             item = {**rule, "grade": s1, "is_prio": is_prio}
             
-            if is_prio: 
+            if is_prio:
                 weighted_res.append(item)
-            elif s1 == "DA": 
+            elif s1 == "DA":
                 da_da_res.append(item)
-            else: 
+            else:
                 ds_ds_res.append(item)
 
-    # 3. 視覺化結果呈現 (排序：加權 > DA > DS) 
+    # 3. 視覺化結果呈現（排序：加權 > DA > DS）
     display_ui_common(weighted_res, "⭐ 加權重點對應")
     display_ui_common(da_da_res, "🟦 DA-DA 對應結果")
     display_ui_common(ds_ds_res, "🟧 DS-DS 對應結果")
 
-    # 4. 建議處理肌肉彙整 (去重複)
+    # 4. 建議處理肌肉彙整（去重複）
     all_matched_items = weighted_res + da_da_res + ds_ds_res
+
     suggested_muscles = []
     for item in all_matched_items:
         m_val = item.get("muscles")
         if m_val:
             # 處理字串格式並統一分隔符號
-            parts = str(m_val).replace('、', ',').split(',')
+            parts = str(m_val).replace("、", ",").split(",")
             suggested_muscles.extend([p.strip() for p in parts if p.strip()])
     
-    unique_muscles_str = "、".join(sorted(list(set(suggested_muscles)))) if suggested_muscles else "無資料"
+    unique_muscles_str = (
+        "、".join(sorted(list(set(suggested_muscles))))
+        if suggested_muscles
+        else "無資料"
+    )
 
-    # 5. 踝部加測互動 UI [cite: 16, 20]
+    # 5. 踝部加測互動 UI
     selected_ankle_options = []
     all_pairs = [" + ".join(sorted(list(r["pair"]))) for r in all_matched_items]
     
     for p_str in ["MSRR + MSSBL", "MSRL + MSSBR"]:
         if p_str in all_pairs:
-            st.markdown(f"<div class='ankle-box'>🔍 偵測到 {p_str} 相對應，請加測：</div>", unsafe_allow_html=True)
+            st.markdown(
+                f"<div class='ankle-box'>🔍 偵測到 {p_str} 相對應，請加測：</div>",
+                unsafe_allow_html=True,
+            )
+
             side = "右" if "MSRR" in p_str else "左"
             opp = "左" if side == "右" else "右"
             
-            l1, l2 = f"{side}踝內翻受限 (處理{side}側線)", f"{opp}踝外翻受限 (處理{opp}深前線)"
-            if st.checkbox(l1, key=f"save_ak1_{p_str}"): selected_ankle_options.append(l1)
-            if st.checkbox(l2, key=f"save_ak2_{p_str}"): selected_ankle_options.append(l2)
+            l1 = f"{side}踝內翻受限 (處理{side}側線)"
+            l2 = f"{opp}踝外翻受限 (處理{opp}深前線)"
 
-    # 6. 雲端同步儲存邏輯 [cite: 14, 17]
+            if st.checkbox(l1, key=f"save_ak1_{p_str}"):
+                selected_ankle_options.append(l1)
+
+            if st.checkbox(l2, key=f"save_ak2_{p_str}"):
+                selected_ankle_options.append(l2)
+
+    # 6. 建立 AI 專用去識別化摘要（尚未包含正式加測文字）
+    deidentified_summary = build_deidentified_clinical_summary(
+        vas_score=vas_score,
+        da_list=da_list,
+        ds_list=ds_list,
+        priority_list=priority_list,
+        all_matched_items=all_matched_items,
+        suggested_muscles=unique_muscles_str,
+        ankle_note="",
+        p_note=p_note,
+        patient_name=p_name,
+        patient_id=p_id,
+    )
+
+    st.session_state["deidentified_summary"] = deidentified_summary
+
+    if all_matched_items:
+        with st.expander("🔐 檢視 AI 專用去識別化摘要"):
+            st.text(st.session_state["deidentified_summary"])
+
+    # 7. 雲端同步儲存邏輯
     st.divider()
+
     if st.button("🚀 完成評估並同步雲端", use_container_width=True):
-        if not p_name or not p_id: 
+        if not p_name or not p_id:
             st.error("請輸入姓名與病歷號！")
         else:
             try:
                 # A. 整合加測備註
                 ankle_final_str = ""
-                triggered_ankle_pairs = [p for p in ["MSRR + MSSBL", "MSRL + MSSBR"] if p in all_pairs]
+                triggered_ankle_pairs = [
+                    p for p in ["MSRR + MSSBL", "MSRL + MSSBR"] if p in all_pairs
+                ]
+
                 if triggered_ankle_pairs:
                     base_prompt = f"偵測到 {'、'.join(triggered_ankle_pairs)} 相對應。"
-                    ankle_final_str = f"{base_prompt}加測結果：{'、'.join(selected_ankle_options)}" if selected_ankle_options else f"{base_prompt}尚未勾選加測結果。"
+                    ankle_final_str = (
+                        f"{base_prompt}加測結果：{'、'.join(selected_ankle_options)}"
+                        if selected_ankle_options
+                        else f"{base_prompt}尚未勾選加測結果。"
+                    )
+
+                # A-1. 若有加測結果，更新 AI 專用去識別化摘要
+                deidentified_summary = build_deidentified_clinical_summary(
+                    vas_score=vas_score,
+                    da_list=da_list,
+                    ds_list=ds_list,
+                    priority_list=priority_list,
+                    all_matched_items=all_matched_items,
+                    suggested_muscles=unique_muscles_str,
+                    ankle_note=ankle_final_str,
+                    p_note=p_note,
+                    patient_name=p_name,
+                    patient_id=p_id,
+                )
+
+                st.session_state["deidentified_summary"] = deidentified_summary
 
                 # B. 整合備註與動作細節
-                act_notes = [f"{a}:{user_action_notes[a].strip()}" for a in ACTIONS if user_action_notes[a].strip()]
+                act_notes = [
+                    f"{a}:{user_action_notes[a].strip()}"
+                    for a in ACTIONS
+                    if user_action_notes[a].strip()
+                ]
+
                 prio_tags = [f"{a}(⭐)" for a in priority_list]
                 combined_details = "/".join(act_notes + prio_tags)
-                final_note = f"{p_note} | 詳細: {combined_details}" if p_note and combined_details else (p_note or combined_details)
+
+                final_note = (
+                    f"{p_note} | 詳細: {combined_details}"
+                    if p_note and combined_details
+                    else (p_note or combined_details)
+                )
                 
-                # C. 時間戳記處理 (自動標記補登) 
+                # C. 時間戳記處理（自動標記補登）
                 now_tw = datetime.now(tz_taiwan)
-                final_dt_str = now_tw.strftime("%Y-%m-%d %H:%M") if p_date >= now_tw.date() else f"{p_date} (補)"
+
+                final_dt_str = (
+                    now_tw.strftime("%Y-%m-%d %H:%M")
+                    if p_date >= now_tw.date()
+                    else f"{p_date} (補)"
+                )
                 
                 # D. 建構紀錄字典
                 record = {
-                    "日期": final_dt_str, 
-                    "評估人": p_assessor, 
-                    "病人姓名": p_name, 
-                    "病歷號": f"'{p_id}", # 強制 Excel 為文字格式
-                    "病人自覺分數": vas_score, 
+                    "日期": final_dt_str,
+                    "評估人": p_assessor,
+                    "病人姓名": p_name,
+                    "病歷號": f"'{p_id}",  # 強制 Excel 為文字格式
+                    "病人自覺分數": vas_score,
                     "加權關鍵點": ", ".join(priority_list),
-                    "判定結果": " / ".join([res['result'] for res in all_matched_items]), 
+                    "判定結果": " / ".join([res["result"] for res in all_matched_items]),
                     "建議處理肌肉": unique_muscles_str,
-                    "備註": final_note, 
+                    "備註": final_note,
                     "加測建議": ankle_final_str,
-                    "AI衛教建議": "" # 預留給未來 AI Agent
+                    "AI衛教建議": "",
                 }
-                record.update(user_scores) # 加入所有主動測試分數
+
+                # 加入所有主動測試分數
+                record.update(user_scores)
                 
-                # E. 同步至 Google Sheets 
+                # E. 同步至 Google Sheets
                 df_old = fetch_data_no_cache(conn)
                 df_final = pd.concat([df_old, pd.DataFrame([record])], ignore_index=True)
                 conn.update(worksheet="Sheet1", data=df_final)
                 
                 st.success(f"✅ 資料已成功同步！系統時間：{final_dt_str}")
                 st.balloons()
+
             except Exception as e:
                 st.error(f"❌ 同步失敗: {str(e)}")
 
@@ -590,6 +798,8 @@ with tab5:
 
 with tab6:
     st.header("🤖 AI 臨床衛教助手")
+
+    st.info("AI 僅接收去識別化臨床摘要，不接收病人姓名與完整病歷號。")
     
     # 模式選擇
     ai_mode = st.radio(
@@ -600,33 +810,61 @@ with tab6:
     st.markdown("---")
     st.subheader("🧘 客製化居家衛教處方即時生成")
 
-    # 處理模式一：當前即時評估一鍵生成
+    # =====================================================
+    # 模式一：根據當前即時評估一鍵生成
+    # =====================================================
     if ai_mode == "⚡ 根據當前評估一鍵生成":
         
-        # 修正 1：補充資訊欄位只在需要搭配前頁數據的「模式一」與「模式二」顯示
         extra_note = st.text_area(
             "📝 治療師額外補充資訊", 
             placeholder="例如：病人為高齡長輩、希望在家做的運動不要超過10分鐘、加強核心穩定..."
         )
-        
-        if 'da_list' in locals() and 'ds_list' in locals():
-            判定結果總覽 = f"功能異常且無症狀(DA)項目: {', '.join(da_list)}\n功能異常且有症狀(DS)項目: {', '.join(ds_list)}"
-            
+
+        # 優先使用 Tab3 已建立好的去識別化摘要
+        clinical_summary = st.session_state.get("deidentified_summary", "")
+
+        # 如果 Tab3 尚未建立去識別化摘要，退而使用 da_list / ds_list 產生簡易去識別化摘要
+        if not clinical_summary and "da_list" in locals() and "ds_list" in locals():
+            clinical_summary = (
+                "【去識別化臨床摘要】\n"
+                f"VAS疼痛分數：{vas_score}\n"
+                f"DA項目：{', '.join(da_list) if da_list else '無'}\n"
+                f"DS項目：{', '.join(ds_list) if ds_list else '無'}\n"
+                f"加權關鍵點：{', '.join(priority_list) if 'priority_list' in locals() and priority_list else '無'}\n"
+                "注意：以上內容已去除病人姓名與完整病歷號，僅供 AI 產生衛教文字使用。"
+            )
+
+        if clinical_summary:
+            # 清理治療師補充資訊，避免不小心輸入姓名或完整病歷號
+            safe_extra_note = sanitize_free_text(
+                text=extra_note,
+                patient_name=p_name if "p_name" in locals() else "",
+                patient_id=p_id if "p_id" in locals() else "",
+            )
+
+            with st.expander("🔐 檢視送往 AI 的去識別化摘要"):
+                st.text(clinical_summary)
+                if safe_extra_note:
+                    st.markdown("補充資訊：")
+                    st.text(safe_extra_note)
+
             if st.button("🚀生成分析建議", key="btn_live_generate"):
                 with st.spinner("KPM-AI 正在對照專家資料庫，進行跨線路動態組裝中..."):
                     st.session_state.generated_advice = get_kpm_ai_advice(
-                        clinical_summary=判定結果總覽, 
-                        extra_info=extra_note
+                        clinical_summary=clinical_summary,
+                        extra_info=safe_extra_note
                     )
                 st.success("✅ 即時衛教單組裝完成！")
-        else:
-            st.warning("⚠️ 系統偵測到當前診次尚未完成動作快篩評估，請先至前方的評估分頁輸入數據。")
 
-    # 處理模式二：抓取雲端歷史紀錄
+        else:
+            st.warning("⚠️ 系統偵測到當前診次尚未完成動作快篩評估，請先至前方的評估分頁輸入數據，並完成 Tab3 判定結果。")
+
+    # =====================================================
+    # 模式二：抓取雲端歷史紀錄
+    # =====================================================
     elif ai_mode == "🔍 抓取歷史評估結果":
         search_id = st.text_input("請輸入病歷號進行檢索", key="ai_search_id")
         
-        # 滿足模式二的補充需求
         extra_note = st.text_area(
             "📝 治療師額外補充資訊", 
             placeholder="例如：病人希望能加強上肢放鬆..."
@@ -635,50 +873,120 @@ with tab6:
         if st.button("🚀生成分析建議", key="btn_history_fetch"):
             with st.spinner("正在搜尋雲端最新資料..."):
                 df_history = fetch_data_with_buffer(conn)
-                if not df_history.empty:
-                    df_history.columns = df_history.columns.str.strip().str.replace('\n', '')
+
+                if df_history.empty:
+                    st.error("❌ 無法讀取雲端資料，請確認網路或 Google Sheets 連線。")
+                else:
+                    df_history.columns = df_history.columns.str.strip().str.replace("\n", "")
                     col_pid = next((c for c in df_history.columns if "病歷號" in c), None)
                     col_date = next((c for c in df_history.columns if "日期" in c), None)
                     col_ai_record = next((c for c in df_history.columns if "AI衛教建議" in c), None)
                     
-                    if col_pid:
+                    if not col_pid:
+                        st.error("❌ 雲端資料找不到「病歷號」欄位。")
+                    else:
                         df_history["pid_clean"] = df_history[col_pid].astype(str).str.lstrip("'").str.strip()
                         p_data = df_history[df_history["pid_clean"] == str(search_id).strip()].copy()
                         
-                        if not p_data.empty:
-                            p_data[col_date] = pd.to_datetime(p_data[col_date], errors='coerce')
-                            latest_record = p_data.sort_values(by=col_date, ascending=False).iloc[0]
+                        if p_data.empty:
+                            st.error("❌ 找不到該病歷號")
+                        else:
+                            if col_date:
+                                p_data[col_date] = pd.to_datetime(p_data[col_date], errors="coerce")
+                                latest_record = p_data.sort_values(by=col_date, ascending=False).iloc[0]
+                            else:
+                                latest_record = p_data.iloc[-1]
+
                             existing_advice = latest_record.get(col_ai_record, "") if col_ai_record else ""
-                            
+
+                            # 如果雲端已有 AI 衛教，而且內容足夠長，直接讀取，不再呼叫 AI
                             if existing_advice and len(str(existing_advice)) > 50:
                                 st.session_state.generated_advice = existing_advice
                                 st.info("💡 已從雲端資料庫讀取現有衛教資訊。")
+
                             else:
-                                muscle_info = latest_record.get('建議處理肌肉', '無資料')
-                                clinical_context = f"判定: {latest_record.get('判定結果', '無')}, 肌肉: {muscle_info}"
-                                st.session_state.generated_advice = get_kpm_ai_advice(clinical_context, extra_note)
+                                # 只取去識別化臨床欄位，不傳姓名與完整病歷號給 AI
+                                muscle_info = latest_record.get("建議處理肌肉", "無資料")
+                                result_info = latest_record.get("判定結果", "無")
+                                vas_info = latest_record.get("病人自覺分數", "無")
+                                priority_info = latest_record.get("加權關鍵點", "無")
+                                ankle_info = latest_record.get("加測建議", "無")
+
+                                safe_extra_note = sanitize_free_text(
+                                    text=extra_note,
+                                    patient_name="",
+                                    patient_id=search_id,
+                                )
+
+                                clinical_context = f"""
+【去識別化歷史臨床摘要】
+病人代碼：{mask_patient_id(search_id)}
+VAS疼痛分數：{vas_info}
+加權關鍵點：{priority_info}
+系統判定結果：{result_info}
+建議處理肌肉：{muscle_info}
+加測建議：{ankle_info}
+
+注意：以上內容已去除病人姓名與完整病歷號，僅供 AI 產生衛教文字使用。
+""".strip()
+
+                                with st.expander("🔐 檢視送往 AI 的歷史去識別化摘要"):
+                                    st.text(clinical_context)
+                                    if safe_extra_note:
+                                        st.markdown("補充資訊：")
+                                        st.text(safe_extra_note)
+
+                                st.session_state.generated_advice = get_kpm_ai_advice(
+                                    clinical_summary=clinical_context,
+                                    extra_info=safe_extra_note
+                                )
                                 st.warning("🆕 雲端無舊紀錄，已產生新 AI 衛教。")
                             
                             # 儲存當前查詢成功的病歷號，供後續同步雲端使用
                             st.session_state.current_sync_pid = str(search_id).strip()
                             st.success("✅ 雲端歷史處理完成")
-                        else:
-                            st.error("❌ 找不到該病歷號")
 
-    # 處理模式三：手動輸入狀況分析
+    # =====================================================
+    # 模式三：手動輸入狀況分析
+    # =====================================================
     else:
-        # 修正 1：完全移除了外部重複的 extra_note，只保留這一個核心描述框，乾淨不混淆
         manual_context = st.text_area(
             "請輸入臨床主訴或自由描述", 
             placeholder="例如：久坐科技廠工程師，主訴右邊高低肩，向前彎腰時大腿後側有嚴重硬緊拉扯感..."
         )
-        if st.button("🚀生成分析建議", key="btn_manual_generate"):
-            with st.spinner("KPM-AI 正在讀取外部知識邊界，進行文字優化轉譯中..."):
-                st.session_state.generated_advice = get_kpm_ai_advice(manual_context, "")
-            st.success("✅ 自由輸入分析完成！")
 
+        if st.button("🚀生成分析建議", key="btn_manual_generate"):
+            if not manual_context.strip():
+                st.error("請先輸入臨床主訴或自由描述。")
+            else:
+                # 手動輸入最容易不小心打入姓名或病歷號，所以一定要先清理
+                safe_manual_context = sanitize_free_text(
+                    text=manual_context,
+                    patient_name=p_name if "p_name" in locals() else "",
+                    patient_id=p_id if "p_id" in locals() else "",
+                )
+
+                manual_ai_context = f"""
+【去識別化手動臨床描述】
+{safe_manual_context}
+
+注意：以上內容已去除病人姓名與完整病歷號，僅供 AI 產生衛教文字使用。
+""".strip()
+
+                with st.expander("🔐 檢視送往 AI 的手動去識別化內容"):
+                    st.text(manual_ai_context)
+
+                with st.spinner("KPM-AI 正在讀取外部知識邊界，進行文字優化轉譯中..."):
+                    st.session_state.generated_advice = get_kpm_ai_advice(
+                        clinical_summary=manual_ai_context,
+                        extra_info=""
+                    )
+                st.success("✅ 自由輸入分析完成！")
+
+    # =====================================================
     # 顯示結果區塊
-    if 'generated_advice' in st.session_state and st.session_state.generated_advice:
+    # =====================================================
+    if "generated_advice" in st.session_state and st.session_state.generated_advice:
         st.markdown("---")
         st.subheader("📋 KPM AI 運動建議")
         st.info("衛教單已生成完畢，可全選複製傳給病人或是影印")
@@ -689,9 +997,11 @@ with tab6:
             height=400,
             label_visibility="collapsed"
         )
+
         c_copy, c_sync = st.columns([1, 2])
         
         with c_copy:
+            # 注意：這裡必須使用真正的 <script>，不要使用 &lt;script&gt;
             js_copy_code = f"""
             <script>
             function copyToClipboard() {{
@@ -713,17 +1023,23 @@ with tab6:
             st.components.v1.html(js_copy_code, height=50)
             
         with c_sync:
-            # 修正 4：雲端同步按鈕觸發
             if st.button("💾 將此建議同步保存至該病患雲端欄位", width=300):
                 target_pid = None
+
                 if ai_mode == "🔍 抓取歷史評估結果" and "current_sync_pid" in st.session_state:
                     target_pid = st.session_state.current_sync_pid
+
                 elif ai_mode == "⚡ 根據當前評估一鍵生成" and "p_id" in locals():
-                    target_pid = p_id  # 抓取第一頁即時輸入的病歷號變數
+                    target_pid = p_id
                 
                 if target_pid:
                     with st.spinner("正在尋找對應病歷號，寫入 AI 衛教建議..."):
-                        success = update_ai_advice_to_cloud(conn, target_pid, st.session_state.generated_advice)
+                        success = update_ai_advice_to_cloud(
+                            conn,
+                            target_pid,
+                            st.session_state.generated_advice
+                        )
+
                         if success:
                             st.success(f"🎉 病歷號 {target_pid} 的 AI 衛教建議已成功寫回雲端試算表！")
                         else:
